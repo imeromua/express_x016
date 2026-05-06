@@ -7,12 +7,11 @@ from aiogram.types import (
 
 
 def kb_admin_main_menu() -> ReplyKeyboardMarkup:
-    """Головна reply-клавіатура адміна."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📢 Розсилка"), KeyboardButton(text="📂 Імпорт графіка")],
             [KeyboardButton(text="🚫 Стоп-слова"), KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="📅 Графік працівника")],
+            [KeyboardButton(text="📅 Графік працівника"), KeyboardButton(text="⚙️ Налаштування Excel")],
         ],
         resize_keyboard=True,
         persistent=True,
@@ -20,7 +19,6 @@ def kb_admin_main_menu() -> ReplyKeyboardMarkup:
 
 
 def kb_admin_panel_inline() -> InlineKeyboardMarkup:
-    """Інлайн-панель з розділом."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📢 Розсилка", callback_data="admin:broadcast"),
@@ -29,6 +27,24 @@ def kb_admin_panel_inline() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🚫 Стоп-слова", callback_data="admin:forbidden"),
             InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats"),
+        ],
+        [
+            InlineKeyboardButton(text="⚙️ Excel-графік", callback_data="admin:xlsx_settings"),
+        ],
+    ])
+
+
+def kb_xlsx_settings() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📂 Завантажити .xlsx", callback_data="xlsx:upload"),
+        ],
+        [
+            InlineKeyboardButton(text="📌 Діапазон комірок", callback_data="xlsx:set_range"),
+            InlineKeyboardButton(text="📄 Аркуш", callback_data="xlsx:set_sheet"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back"),
         ],
     ])
 
@@ -43,7 +59,7 @@ def kb_confirm_broadcast() -> InlineKeyboardMarkup:
 def kb_forbidden_actions() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="➕ Додати", callback_data="forbidden:add"),
-        InlineKeyboardButton(text="♻️ Очистити все", callback_data="forbidden:clear"),
+        InlineKeyboardButton(text="♻️ Очистити", callback_data="forbidden:clear"),
         InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back"),
     ]])
 

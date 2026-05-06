@@ -1,3 +1,5 @@
+"""Точка входу. Налаштуває bot, dispatcher, middleware, роутери."""
+
 import asyncio
 import logging
 
@@ -18,12 +20,31 @@ from app.handlers.user.router import router as user_router
 from app.middlewares.db import DbSessionMiddleware
 from app.middlewares.forbidden_words import ForbiddenWordsMiddleware
 from app.middlewares.redis import RedisMiddleware
+from app.repositories.setting import SettingRepository
+from app.utils.xlsx_screenshot import set_xlsx_config
 
 
-async def on_startup(bot: Bot) -> None:
+async def _load_xlsx_config_on_startup(session_factory) -> None:
+    """Завантажує налаштування Excel з БД при старті."""
+    async with session_factory() as session:
+        repo = SettingRepository(session)
+        cfg = await repo.get_xlsx_config()
+        if cfg.get("xlsx_path"):
+            set_xlsx_config(
+                xlsx_path=cfg["xlsx_path"],
+                sheet=cfg.get("xlsx_sheet"),
+                cell_range=cfg.get("xlsx_cell_range"),
+            )
+            logger.info(f"[startup] Excel config loaded: {cfg}")
+        else:
+            logger.warning("[startup] Excel config not set. Use admin panel to configure.")
+
+
+async def on_startup(bot: Bot, session_factory) -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _load_xlsx_config_on_startup(session_factory)
     me = await bot.get_me()
     logger.info(f"Бот запущено: @{me.username} (id={me.id})")
 
@@ -47,18 +68,19 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
 
     # Middleware
-    dp.update.middleware(DbSessionMiddleware())
+    db_middleware = DbSessionMiddleware()
+    dp.update.middleware(db_middleware)
     dp.update.middleware(RedisMiddleware(redis))
     dp.message.middleware(ForbiddenWordsMiddleware())
 
-    # Роутери: errors першим, admin до user (фільтр IsAdmin)
+    # Роутери: errors перший, admin до user (фільтр IsAdmin)
     dp.include_router(errors.router)
     dp.include_router(admin_router)
     dp.include_router(user_router)
     dp.include_router(group_router)
 
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    dp.startup.register(lambda: on_startup(bot, db_middleware.session_factory))
+    dp.shutdown.register(lambda: on_shutdown(bot))
 
     logger.info("Поллінг запущено")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

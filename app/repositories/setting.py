@@ -12,6 +12,9 @@ from app.models.setting import Setting
 _KEY_FORBIDDEN = "forbidden_words"
 _KEY_URL_WHITELIST = "url_whitelist"
 _KEY_ONBOARDING_RULES = "onboarding_rules"
+_KEY_XLSX_PATH = "xlsx_path"
+_KEY_XLSX_SHEET = "xlsx_sheet"
+_KEY_XLSX_RANGE = "xlsx_cell_range"
 
 _DEFAULT_WHITELIST = [
     "t.me", "telegram.org", "youtube.com", "youtu.be",
@@ -71,9 +74,27 @@ class SettingRepository:
             return _DEFAULT_WHITELIST
 
     async def get_onboarding_rules(self) -> str:
-        """Повертає правила групи (MarkdownV2). Якщо не задано — дефолт."""
         raw = await self._get(_KEY_ONBOARDING_RULES)
         return raw if raw else _DEFAULT_RULES
 
     async def set_onboarding_rules(self, text: str) -> None:
         await self._set(_KEY_ONBOARDING_RULES, text)
+
+    # ─── Excel налаштування ──────────────────────────────────────
+
+    async def get_xlsx_config(self) -> dict:
+        """Повертає налаштування Excel: path, sheet, cell_range."""
+        return {
+            "xlsx_path": await self._get(_KEY_XLSX_PATH),
+            "xlsx_sheet": await self._get(_KEY_XLSX_SHEET),
+            "xlsx_cell_range": await self._get(_KEY_XLSX_RANGE),
+        }
+
+    async def set_xlsx_path(self, path: str) -> None:
+        await self._set(_KEY_XLSX_PATH, path)
+
+    async def set_xlsx_sheet(self, sheet: str) -> None:
+        await self._set(_KEY_XLSX_SHEET, sheet)
+
+    async def set_xlsx_range(self, cell_range: str) -> None:
+        await self._set(_KEY_XLSX_RANGE, cell_range)

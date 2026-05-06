@@ -1,5 +1,3 @@
-"""Адмін-роутер: reply-кнопки + inline callbacks."""
-
 from aiogram import Router, F
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -8,9 +6,10 @@ from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.filters.is_admin import IsAdminFilter
-from app.handlers.admin import broadcast, reply_user, forbidden_words, import_schedule
+from app.handlers.admin import broadcast, reply_user, forbidden_words, import_schedule, xlsx_settings
 from app.keyboards.admin import kb_admin_main_menu, kb_admin_panel_inline, kb_back_to_admin
 from app.repositories.user import UserRepository
+from app.states.admin import AdminStates
 from app.states.schedule import ScheduleStates
 from app.utils.text import esc
 
@@ -28,8 +27,6 @@ async def admin_start(message: Message) -> None:
         parse_mode="MarkdownV2",
     )
 
-
-# ─── Reply-кнопки ───────────────────────────────────────────────
 
 @router.message(F.text == "🚫 Стоп-слова")
 async def btn_forbidden_admin(message: Message, session: AsyncSession) -> None:
@@ -50,14 +47,31 @@ async def btn_stats(message: Message, session: AsyncSession) -> None:
 
 @router.message(F.text == "📅 Графік працівника", StateFilter(default_state))
 async def btn_worker_schedule(message: Message, state: FSMContext) -> None:
-    """Запускає пошук графіку за прізвищем — через FSMState."""
     await state.set_state(ScheduleStates.waiting_surname)
+    await message.answer("🔍 Введіть прізвище працівника:")
+
+
+@router.message(F.text == "⚙️ Налаштування Excel")
+async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
+    repo = UserRepository(session)  # використовуємо session для setting repo
+    from app.repositories.setting import SettingRepository
+    srep = SettingRepository(session)
+    cfg = await srep.get_xlsx_config()
+    path = cfg.get("xlsx_path") or "не задано"
+    sheet = cfg.get("xlsx_sheet") or "перший аркуш"
+    cell_range = cfg.get("xlsx_cell_range") or "весь аркуш"
+    from app.keyboards.admin import kb_xlsx_settings
     await message.answer(
-        "🔍 Введіть прізвище працівника:",
+        f"⚙️ *Налаштування графіка \(Excel\)*\n\n"
+        f"📄 Файл: `{esc(path)}`\n"
+        f"📄 Аркуш: `{esc(sheet)}`\n"
+        f"📌 Діапазон: `{esc(cell_range)}`",
+        reply_markup=kb_xlsx_settings(),
+        parse_mode="MarkdownV2",
     )
 
 
-# ─── Inline callbacks панелі ─────────────────────────────────────
+# ─── Inline callbacks ─────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery) -> None:
@@ -83,7 +97,6 @@ async def cb_admin_stats(callback: CallbackQuery, session: AsyncSession) -> None
 
 @router.callback_query(F.data == "admin:broadcast")
 async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
-    """Inline-кнопка розсилки — коректно передає state."""
     await callback.answer()
     await state.set_state(AdminStates.waiting_broadcast_text)
     await callback.message.edit_text(
@@ -104,19 +117,21 @@ async def cb_admin_import(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "admin:forbidden")
-async def cb_admin_forbidden(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
-    """Inline-кнопка стоп-слів — передає session."""
+async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     from app.handlers.admin.forbidden_words import show_forbidden_list
     await show_forbidden_list(callback.message, session)
+
+
+@router.callback_query(F.data == "admin:xlsx_settings")
+async def cb_admin_xlsx_settings(callback: CallbackQuery, session: AsyncSession) -> None:
+    await callback.answer()
+    from app.handlers.admin.xlsx_settings import cb_xlsx_settings
+    await cb_xlsx_settings(callback, session)
 
 
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)
 router.include_router(forbidden_words.router)
 router.include_router(import_schedule.router)
-
-# Імпортуємо AdminStates тут щоб не дублювати
-from app.states.admin import AdminStates  # noqa: E402
+router.include_router(xlsx_settings.router)
