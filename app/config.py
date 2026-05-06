@@ -36,7 +36,10 @@ class Settings(BaseSettings):
     virustotal_api_key: str = ""
 
     # Broadcast
-    broadcast_delay: float = 0.05  # секунд між повідомленнями
+    broadcast_delay: float = 0.05
+
+    # Onboarding
+    registration_timeout_minutes: int = 30
 
 
 @lru_cache

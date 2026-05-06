@@ -1,69 +1,52 @@
-"""Admin reply — відповідь адміна користувачу в приватні.
+"""Admin reply — відповідь користувачу в приватні.
 Флоу:
-  Користувач пише боту → бот forward адмінам з user_id в підписі
-  Адмін reply на це повідомлення + /reply → бот пересилає юзеру
+  Користувач пише боту → бот forward адмінам з caption '#user:{user_id}'
+  Адмін reply на це повідомлення → бот copy_message юзеру
 """
 
 from aiogram import Router, F, Bot
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from loguru import logger
 
 from app.filters.is_admin import IsAdminFilter
+from app.keyboards.admin import kb_back_to_admin
 from app.states.admin import AdminStates
+from app.utils.text import esc
 
 router = Router(name="admin:reply")
 router.message.filter(IsAdminFilter())
 
-# Ключ FSM: зберігаємо target_user_id
-_FORWARD_PREFIX = "✉️ Повідомлення від користувача #"
+_USER_TAG = "#user:"
 
 
-@router.message(
-    Command("reply"),
-    F.reply_to_message,
-)
-async def cmd_reply(
-    message: Message,
-    state: FSMContext,
+@router.message(F.reply_to_message & F.reply_to_message.caption.startswith(_USER_TAG))
+async def cmd_reply_from_caption(
+    message: Message, bot: Bot, state: FSMContext
 ) -> None:
-    """
-    /reply в відповідь на форвард від юзера — зарусковує FSM.
-    """
-    forwarded = message.reply_to_message
-    user_id = _extract_user_id(forwarded)
-
-    if not user_id:
-        await message.answer(
-            "❌ Не вдалося визначити користувача\. "
-            "Переконайтесь, що відповідаєте на форвард бота\.",
-            parse_mode="MarkdownV2",
-        )
+    """Визначає user_id з caption '#user:123456' і відповідає без додаткових дій."""
+    caption = message.reply_to_message.caption or ""
+    try:
+        target_user_id = int(caption.split(_USER_TAG)[-1].split()[0])
+    except (ValueError, IndexError):
+        await message.answer("❌ Не вдалося визначити користувача\.")
         return
-
-    await state.set_state(AdminStates.waiting_reply_text)
-    await state.update_data(target_user_id=user_id)
-    await message.answer(
-        f"Запишіть текст або надішліть медіа для пересилки користувачу `{user_id}`:",
-        parse_mode="MarkdownV2",
-    )
+    await _send_reply(message, bot, target_user_id)
 
 
-@router.message(AdminStates.waiting_reply_text)
-async def send_admin_reply(
-    message: Message,
-    bot: Bot,
-    state: FSMContext,
+@router.message(F.reply_to_message & F.reply_to_message.forward_origin)
+async def cmd_reply_from_forward(
+    message: Message, bot: Bot
 ) -> None:
-    data = await state.get_data()
-    target_user_id = data.get("target_user_id")
-    await state.clear()
+    """Fallback: reply на повідомлення з forward_origin."""
+    origin = message.reply_to_message.forward_origin
+    if hasattr(origin, "sender_user") and origin.sender_user:
+        await _send_reply(message, bot, origin.sender_user.id)
+    else:
+        await message.answer("❌ Не вдалося визначити користувача\.")
 
-    if not target_user_id:
-        await message.answer("❌ Сесію втрачено\. Спробуйте ще раз\.", parse_mode="MarkdownV2")
-        return
 
+async def _send_reply(message: Message, bot: Bot, target_user_id: int) -> None:
     try:
         await bot.copy_message(
             chat_id=target_user_id,
@@ -71,37 +54,10 @@ async def send_admin_reply(
             message_id=message.message_id,
         )
         await message.answer(
-            f"✅ Повідомлення переслано користувачу `{target_user_id}`\.",
+            f"✅ Переслано користувачу `{target_user_id}`\.",
+            reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )
-        logger.info(f"[admin_reply] Адмін {message.from_user.id} → користувач {target_user_id}")
+        logger.info(f"[reply] {message.from_user.id} → {target_user_id}")
     except Exception as e:
-        await message.answer(
-            f"❌ Не вдалося надіслати: `{_esc(str(e))}`",
-            parse_mode="MarkdownV2",
-        )
-
-
-def _extract_user_id(msg: Message) -> int | None:
-    """
-    Витягує user_id з підпису форварда або з forward_origin.
-    """
-    if msg is None:
-        return None
-    if msg.forward_origin:
-        origin = msg.forward_origin
-        if hasattr(origin, "sender_user") and origin.sender_user:
-            return origin.sender_user.id
-    # Fallback: шукаємо user_id в тексті підпису (#123456789)
-    if msg.caption and _FORWARD_PREFIX in msg.caption:
-        try:
-            return int(msg.caption.split(_FORWARD_PREFIX)[-1].split()[0])
-        except (ValueError, IndexError):
-            pass
-    return None
-
-
-def _esc(text: str) -> str:
-    for ch in r"\_*[]()~`>#+-=|{}.!":
-        text = text.replace(ch, f"\\{ch}")
-    return text
+        await message.answer(f"❌ Не вдалося: `{esc(str(e))}`", parse_mode="MarkdownV2")

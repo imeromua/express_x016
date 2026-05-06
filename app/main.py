@@ -1,5 +1,3 @@
-"""Точка входу. Запуск бота."""
-
 import asyncio
 import logging
 
@@ -16,15 +14,13 @@ from app.db.session import get_engine
 from app.handlers import errors
 from app.handlers.admin.router import router as admin_router
 from app.handlers.group.router import router as group_router
-from app.handlers.user.onboarding import router as onboarding_router
-from app.handlers.user.schedule import router as schedule_router
+from app.handlers.user.router import router as user_router
 from app.middlewares.db import DbSessionMiddleware
 from app.middlewares.forbidden_words import ForbiddenWordsMiddleware
 from app.middlewares.redis import RedisMiddleware
 
 
 async def on_startup(bot: Bot) -> None:
-    """Ініціалізація БД та логування старту."""
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -38,42 +34,33 @@ async def on_shutdown(bot: Bot) -> None:
 
 
 async def main() -> None:
-    # Базове логування
     logging.basicConfig(level=logging.INFO)
-    logger.info("Старт...")
-
     settings = get_settings()
 
-    # Redis
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
-
-    # FSM storage — Redis
     storage = RedisStorage(redis=redis)
 
-    # Bot + Dispatcher
     bot = Bot(
         token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
     )
     dp = Dispatcher(storage=storage)
 
-    # --- Middleware (порядок важливий) ---
+    # Middleware
     dp.update.middleware(DbSessionMiddleware())
     dp.update.middleware(RedisMiddleware(redis))
     dp.message.middleware(ForbiddenWordsMiddleware())
 
-    # --- Роутери ---
-    dp.include_router(errors.router)       # помилки першими
+    # Роутери: errors першим, admin до user (фільтр IsAdmin)
+    dp.include_router(errors.router)
     dp.include_router(admin_router)
-    dp.include_router(onboarding_router)
-    dp.include_router(schedule_router)
+    dp.include_router(user_router)
     dp.include_router(group_router)
 
-    # --- Хуки ---
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    logger.info("Запуск polling...")
+    logger.info("Поллінг запущено")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 

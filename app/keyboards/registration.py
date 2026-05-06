@@ -8,35 +8,21 @@ from aiogram.types import (
 
 
 def kb_consent() -> InlineKeyboardMarkup:
-    """Кнопка "Згоден з правилами" в inline-повідомленні."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Згоден з правилами",
-                    callback_data="consent:agree",
-                )
-            ]
-        ]
-    )
+    """Inline-кнопка згоди з правилами."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Погоджуюсь з правилами", callback_data="consent:agree"),
+    ]])
 
 
 def kb_request_contact() -> ReplyKeyboardMarkup:
-    """Кнопка "Поділитися номером" — reply-клавіатура з request_contact."""
+    """Reply-клавіатура з кнопкою передачі номера."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="📱 Поділитися номером",
-                    request_contact=True,
-                )
-            ]
-        ],
+        keyboard=[[KeyboardButton(text="📱 Поділитись номером", request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
 def kb_remove() -> ReplyKeyboardRemove:
-    """'Прибрати' reply-клавіатуру."""
+    """Прибрати reply-клавіатуру."""
     return ReplyKeyboardRemove()

@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Date, Index, String
+from sqlalchemy import Date, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -11,11 +11,11 @@ class Schedule(Base):
     __table_args__ = (
         Index("ix_schedules_pib", "pib"),
         Index("ix_schedules_date", "work_date"),
-        {"schema": None},
+        UniqueConstraint("pib", "work_date", name="uq_schedule_pib_date"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     pib: Mapped[str] = mapped_column(String(200), nullable=False)
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False)  # робочий / вихідний
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
     day_name: Mapped[str] = mapped_column(String(20), nullable=False)

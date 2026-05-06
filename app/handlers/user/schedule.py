@@ -1,92 +1,105 @@
-from aiogram import Router, F
-from aiogram.types import Message
-from aiogram.enums import ChatType
-from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
+"""Графік — inline callbacks + reply кнопка."""
 
-from app.config import get_settings
+from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import StateFilter
+from loguru import logger
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.keyboards.user import kb_schedule_inline
 from app.middlewares.throttling import ThrottlingMiddleware
 from app.repositories.user import UserRepository
 from app.services.schedule import ScheduleService
-from app.utils.schedule_formatter import format_schedule
+from app.states.schedule import ScheduleStates
+from app.utils.text import esc
 
 router = Router(name="user:schedule")
 
-_CMD = "графік"
 
-
-@router.message(F.text.lower().startswith(_CMD))
-async def cmd_schedule(
-    message: Message,
+@router.callback_query(F.data == "schedule:my")
+async def cb_my_schedule(
+    callback: CallbackQuery,
     session: AsyncSession,
     redis: Redis,
 ) -> None:
-    """
-    Команда 'Графік' — показує розклад на найближчі 5 днів.
+    await callback.answer()
+    user_id = callback.from_user.id
 
-    Правила:
-    - В групі: показує власний графік (user_id → pib)
-    - Якщо текст містить > 2 слів — ігноруємо (випадкове спрацювання)
-    - Throttling: 1 запит / 5 секунд
-    """
-    settings = get_settings()
-    user = message.from_user
-    text = (message.text or "").strip()
-    parts = text.split()
-
-    # Захист: більше 2 слів — ігноруємо
-    if len(parts) > 2:
+    if not await ThrottlingMiddleware.check_action(redis, user_id, "schedule", cooldown=5):
+        await callback.answer("⏳ Зачекайте 5 секунд", show_alert=True)
         return
 
-    # Throttling для команди 'графік'
-    throttled = await ThrottlingMiddleware.check_action(
-        redis=redis,
-        user_id=user.id,
-        action="schedule",
-        cooldown=settings.schedule_request_cooldown,
-    )
-    if throttled:
-        await message.answer(
-            "⏳ Зачекайте кілька секунд перед наступним запитом\.",
+    repo = UserRepository(session)
+    user = await repo.get_by_id(user_id)
+
+    if not user or not user.pib:
+        await callback.message.answer(
+            "⚠️ Ваш профіль не містить ПІБ\. Зв\'}яжіться з адміном\.",
             parse_mode="MarkdownV2",
         )
         return
 
     svc = ScheduleService(session)
-    user_repo = UserRepository(session)
+    records = await svc.get_upcoming_for_pib(user.pib)
 
-    # Визначаємо ПІБ
-    if len(parts) == 2:
-        # 'Графік Прізвище' — шукаємо за прізвищем
-        surname = parts[1]
-        pib = await svc.resolve_pib(surname)
-        if not pib:
-            await message.answer(
-                f"❌ Співробітника з прізвищем *{_esc(surname)}* не знайдено\.",
-                parse_mode="MarkdownV2",
-            )
-            return
-    else:
-        # Просто 'Графік' — беремо власний pib з профілю
-        db_user = await user_repo.get_by_id(user.id)
-        if not db_user or not db_user.pib:
-            await message.answer(
-                "❌ Ваш профіль не знайдено\. "
-                "Пройдіть реєстрацію через заявку на вступ до групи\.",
-                parse_mode="MarkdownV2",
-            )
-            return
-        pib = db_user.pib
+    if not records:
+        await callback.message.answer(
+            "📅 Графік на найближчі дні не знайдено\. Очікуйте імпорту адміном\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    from app.utils.schedule_formatter import format_schedule
+    text = format_schedule(records, user.pib)
+    await callback.message.answer(text, parse_mode="MarkdownV2")
+
+
+@router.callback_query(F.data == "schedule:search")
+async def cb_search_schedule(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await callback.answer()
+    await state.set_state(ScheduleStates.waiting_surname)
+    await callback.message.answer(
+        "🔍 Введіть прізвище співробітника:",
+    )
+
+
+@router.message(StateFilter(ScheduleStates.waiting_surname), F.text)
+async def receive_surname(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    redis: Redis,
+) -> None:
+    surname = (message.text or "").strip()
+    await state.clear()
+
+    if not surname or len(surname.split()) > 2:
+        return
+
+    if not await ThrottlingMiddleware.check_action(redis, message.from_user.id, "schedule", cooldown=5):
+        await message.answer("⏳ Зачекайте 5 секунд")
+        return
+
+    svc = ScheduleService(session)
+    pib = await svc.resolve_pib(surname)
+
+    if not pib:
+        await message.answer(
+            f"❌ Співробітника з прізвищем *{esc(surname)}* не знайдено\.",
+            parse_mode="MarkdownV2",
+        )
+        return
 
     records = await svc.get_upcoming_for_pib(pib)
-    reply = format_schedule(records, pib)
+    if not records:
+        await message.answer("📅 Графік відсутній\.")
+        return
 
-    await message.answer(reply, parse_mode="MarkdownV2")
-    logger.info(f"Графік видано: user={user.id} pib={pib!r}")
-
-
-def _esc(text: str) -> str:
-    for ch in r"\_*[]()~`>#+-=|{}.!":
-        text = text.replace(ch, f"\\{ch}")
-    return text
+    from app.utils.schedule_formatter import format_schedule
+    text = format_schedule(records, pib)
+    await message.answer(text, parse_mode="MarkdownV2")

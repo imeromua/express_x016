@@ -33,6 +33,13 @@ class UserRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_phone(self, phone: str) -> Optional[User]:
+        """Пошук за нормалізованим номером телефону."""
+        result = await self._s.execute(
+            select(User).where(User.phone == phone)
+        )
+        return result.scalar_one_or_none()
+
     async def get_all_active_ids(self) -> List[int]:
         result = await self._s.execute(
             select(User.user_id).where(User.is_active == True)  # noqa: E712
@@ -46,3 +53,10 @@ class UserRepository:
             .values(is_active=active)
         )
         await self._s.commit()
+
+    async def count_active(self) -> int:
+        from sqlalchemy import func
+        result = await self._s.execute(
+            select(func.count()).select_from(User).where(User.is_active == True)  # noqa
+        )
+        return result.scalar_one()

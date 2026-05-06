@@ -1,8 +1,3 @@
-"""Middleware фільтрації заборонених слів.
-Зберігає список у Redis (TTL=1h) для швидкого доступу.
-При cache miss — читає з БД і оновлює кеш.
-"""
-
 import json
 from typing import Any, Awaitable, Callable
 
@@ -16,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.setting import SettingRepository
 
 _CACHE_KEY = "moderation:forbidden_words"
-_CACHE_TTL = 3600  # 1 година
+_CACHE_TTL = 3600
 
 
 class ForbiddenWordsMiddleware(BaseMiddleware):
@@ -28,8 +23,6 @@ class ForbiddenWordsMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, Message):
             return await handler(event, data)
-
-        # Тільки групові чати
         if event.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
             return await handler(event, data)
 
@@ -43,24 +36,20 @@ class ForbiddenWordsMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         words = await self._get_words(redis, session)
-
         for word in words:
             if word in text:
-                logger.warning(
-                    f"[forbidden] Знайдено '{word}' від {event.from_user.id}"
-                )
+                logger.warning(f"[forbidden] '{word}' від {event.from_user.id}")
                 try:
                     await event.delete()
                     await event.bot.send_message(
                         event.from_user.id,
-                        f"⚠️ Твоє повідомлення видалено: містило заборонене слово\."
-                        " Будь ласка, дотримуйся правил спільноти\.",
+                        "⚠️ Твоє повідомлення видалено: містило заборонене слово\."
+                        " Будь ласка, дотримуйсь правил спільноти\.",
                         parse_mode="MarkdownV2",
                     )
                 except Exception as e:
-                    logger.error(f"[forbidden] Помилка видалення: {e}")
-                return  # Перериваємо обробку
-
+                    logger.error(f"[forbidden] {e}")
+                return
         return await handler(event, data)
 
     @staticmethod

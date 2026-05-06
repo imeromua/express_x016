@@ -11,11 +11,20 @@ from app.models.setting import Setting
 
 _KEY_FORBIDDEN = "forbidden_words"
 _KEY_URL_WHITELIST = "url_whitelist"
+_KEY_ONBOARDING_RULES = "onboarding_rules"
 
 _DEFAULT_WHITELIST = [
     "t.me", "telegram.org", "youtube.com", "youtu.be",
     "google.com", "wikipedia.org",
 ]
+
+_DEFAULT_RULES = (
+    "ℹ️ *Правила спільноти:*\n\n"
+    "1\. Шанобливо спілкуємо з колегами\n"
+    "2\. Не розповсюджуємо сторонні посилання\n"
+    "3\. Не спамимо та не флудимо\n"
+    "4\. Тематика виключно робоча"
+)
 
 
 class SettingRepository:
@@ -60,3 +69,11 @@ class SettingRepository:
             return json.loads(raw)
         except json.JSONDecodeError:
             return _DEFAULT_WHITELIST
+
+    async def get_onboarding_rules(self) -> str:
+        """Повертає правила групи (MarkdownV2). Якщо не задано — дефолт."""
+        raw = await self._get(_KEY_ONBOARDING_RULES)
+        return raw if raw else _DEFAULT_RULES
+
+    async def set_onboarding_rules(self, text: str) -> None:
+        await self._set(_KEY_ONBOARDING_RULES, text)
