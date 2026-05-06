@@ -2,9 +2,10 @@
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.filters.is_admin import IsAdminFilter
 from app.keyboards.user import kb_main_menu, kb_schedule_inline
 from app.repositories.user import UserRepository
 from app.utils.text import esc
@@ -12,7 +13,7 @@ from app.utils.text import esc
 router = Router(name="user:start")
 
 
-@router.message(CommandStart())
+@router.message(CommandStart(), ~IsAdminFilter())
 async def cmd_start(message: Message, session: AsyncSession) -> None:
     repo = UserRepository(session)
     user = await repo.get_by_id(message.from_user.id)
@@ -33,31 +34,38 @@ async def cmd_start(message: Message, session: AsyncSession) -> None:
         )
 
 
-@router.message(F.text == "ℹ️ Довідка")
+@router.message(F.text == "ℹ️ Довідка", ~IsAdminFilter())
 async def btn_help(message: Message) -> None:
     await message.answer(
         "ℹ️ *Довідка*\n\n"
         "📅 *Мій графік* — ваш розклад роботи на 5 днів вперед\n"
-        "📩 *Зв\'}язок з адміном* — надіслати повідомлення адміністрації\n\n"
-        "❓ Питання — пишіть наму в чат",
+        f"📩 *{esc("Зв'язок з адміном")}* — надіслати повідомлення адміністрації\n\n"
+        "❓ Питання — пишіть нам у чат",
         parse_mode="MarkdownV2",
     )
 
 
-@router.message(F.text == "📅 Мій графік")
+@router.message(F.text == "📅 Мій графік", ~IsAdminFilter())
 async def btn_my_schedule(message: Message, session: AsyncSession) -> None:
     repo = UserRepository(session)
     user = await repo.get_by_id(message.from_user.id)
     has_pib = bool(user and user.pib)
+    if not has_pib:
+        await message.answer(
+            "⚠️ Ваш профіль не прив\'язаний до графіку\. "
+            "Зверніться до адміністратора для прив\'язки ПІБ\.",
+            parse_mode="MarkdownV2",
+        )
+        return
     await message.answer(
         "📅 Оберіть дію:",
         reply_markup=kb_schedule_inline(has_own=has_pib),
     )
 
 
-@router.message(F.text == "📩 Зв'язок з адміном")
+@router.message(F.text == "📩 Зв'язок з адміном", ~IsAdminFilter())
 async def btn_contact_admin(message: Message) -> None:
     await message.answer(
-        "✏️ Напишіть ваше повідомлення, і адміністратор зв'яжеться з вами \u2935️",
+        "✏️ Напишіть ваше повідомлення, і адміністратор зв\'яжеться з вами ⬇️",
         parse_mode="MarkdownV2",
     )

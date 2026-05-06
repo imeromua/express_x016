@@ -1,18 +1,20 @@
-"""Графік — inline callbacks + reply кнопка."""
+"""Графік — inline callbacks + FSM пошук за прізвищем."""
 
 from aiogram import Router, F
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
 from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
+from aiogram.types import Message, CallbackQuery
 from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.keyboards.user import kb_schedule_inline
+from app.keyboards.user import kb_schedule_inline, kb_main_menu
 from app.middlewares.throttling import ThrottlingMiddleware
 from app.repositories.user import UserRepository
 from app.services.schedule import ScheduleService
 from app.states.schedule import ScheduleStates
+from app.utils.schedule_formatter import format_schedule
 from app.utils.text import esc
 
 router = Router(name="user:schedule")
@@ -36,7 +38,8 @@ async def cb_my_schedule(
 
     if not user or not user.pib:
         await callback.message.answer(
-            "⚠️ Ваш профіль не містить ПІБ\. Зв\'}яжіться з адміном\.",
+            "⚠️ Ваш профіль не прив\'язаний до графіку\."
+            " Зверніться до адміністратора\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -46,12 +49,12 @@ async def cb_my_schedule(
 
     if not records:
         await callback.message.answer(
-            "📅 Графік на найближчі дні не знайдено\. Очікуйте імпорту адміном\.",
+            "📅 Графік на найближчі дні не знайдено\."
+            " Очікуйте імпорту адміном\.",
             parse_mode="MarkdownV2",
         )
         return
 
-    from app.utils.schedule_formatter import format_schedule
     text = format_schedule(records, user.pib)
     await callback.message.answer(text, parse_mode="MarkdownV2")
 
@@ -63,9 +66,7 @@ async def cb_search_schedule(
 ) -> None:
     await callback.answer()
     await state.set_state(ScheduleStates.waiting_surname)
-    await callback.message.answer(
-        "🔍 Введіть прізвище співробітника:",
-    )
+    await callback.message.answer("🔍 Введіть прізвище співробітника:")
 
 
 @router.message(StateFilter(ScheduleStates.waiting_surname), F.text)
@@ -78,11 +79,18 @@ async def receive_surname(
     surname = (message.text or "").strip()
     await state.clear()
 
+    # Захист від випадкових спрацювань
     if not surname or len(surname.split()) > 2:
+        await message.answer(
+            "❌ Введіть лише прізвище \(1\-2 слова\)\.",
+            parse_mode="MarkdownV2",
+        )
         return
 
-    if not await ThrottlingMiddleware.check_action(redis, message.from_user.id, "schedule", cooldown=5):
-        await message.answer("⏳ Зачекайте 5 секунд")
+    if not await ThrottlingMiddleware.check_action(
+        redis, message.from_user.id, "schedule", cooldown=5
+    ):
+        await message.answer("⏳ Зачекайте 5 секунд перед наступним запитом\.", parse_mode="MarkdownV2")
         return
 
     svc = ScheduleService(session)
@@ -97,9 +105,11 @@ async def receive_surname(
 
     records = await svc.get_upcoming_for_pib(pib)
     if not records:
-        await message.answer("📅 Графік відсутній\.")
+        await message.answer(
+            f"📅 Графік для *{esc(pib)}* на найближчі дні відсутній\.",
+            parse_mode="MarkdownV2",
+        )
         return
 
-    from app.utils.schedule_formatter import format_schedule
     text = format_schedule(records, pib)
     await message.answer(text, parse_mode="MarkdownV2")

@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from redis.asyncio import Redis
@@ -17,11 +18,8 @@ router.callback_query.filter(IsAdminFilter())
 _CACHE_KEY = "moderation:forbidden_words"
 
 
-async def show_forbidden_list(message: Message, session: AsyncSession = None) -> None:
-    """Показати список — виклик з reply-кнопки або callback."""
-    if session is None:
-        await message.answer("⚙️ Отримую список...")
-        return
+async def show_forbidden_list(message: Message, session: AsyncSession) -> None:
+    """Показати список — session обов'язковий."""
     repo = SettingRepository(session)
     words = await repo.get_forbidden_words()
     if not words:
@@ -41,17 +39,17 @@ async def btn_forbidden(message: Message, session: AsyncSession) -> None:
 async def cb_forbidden_add(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(AdminStates.waiting_forbidden_word)
-    await callback.message.answer("✏️ Надішліть слово для додавання:")
+    await callback.message.answer("✏️ Надішліть слово для додавання до списку:")
 
 
-@router.message(AdminStates.waiting_forbidden_word)
+@router.message(StateFilter(AdminStates.waiting_forbidden_word))
 async def receive_forbidden_word(
     message: Message, state: FSMContext, session: AsyncSession, redis: Redis
 ) -> None:
     word = (message.text or "").strip().lower()
     await state.clear()
     if not word:
-        await message.answer("❌ Порожне слово\.")
+        await message.answer("❌ Порожнє слово\.", parse_mode="MarkdownV2")
         return
     repo = SettingRepository(session)
     words = await repo.get_forbidden_words()

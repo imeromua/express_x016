@@ -1,6 +1,12 @@
-"""Пересилання повідомлень від юзера до адміна з тегом #user:{id}."""
+"""Пересилання повідомлень від юзера до адміна з тегом #user:{id}.
+
+Працює ТІЛЬКИ коли юзер не перебуває в жодному FSM-стані.
+Завдяки StateFilter(state=None) не перехоплює повідомлення під час реєстрації.
+"""
 
 from aiogram import Router, F, Bot
+from aiogram.filters import StateFilter
+from aiogram.fsm.state import default_state
 from aiogram.types import Message
 from loguru import logger
 
@@ -14,11 +20,18 @@ router = Router(name="user:contact_admin")
 @router.message(
     ~IsAdminFilter(),
     F.chat.type == "private",
+    StateFilter(default_state),          # тільки поза FSM-станами
+    ~F.text.startswith("/"),             # не команди
+    ~F.text.in_({
+        "📅 Мій графік",
+        "ℹ️ Довідка",
+        "📩 Зв'язок з адміном",
+    }),                                   # не кнопки головного меню
 )
 async def forward_to_admins(message: Message, bot: Bot) -> None:
     """
-    Будь-яке повідомлення від не-адміна в приватному чаті
-    пересилається адмінам з caption-тегом для подальшої відповіді.
+    Будь-яке вільне повідомлення від не-адміна в приваті
+    пересилається адмінам з caption-тегом для reply.
     """
     settings = get_settings()
     user = message.from_user
@@ -28,6 +41,7 @@ async def forward_to_admins(message: Message, bot: Bot) -> None:
         f"{tag}"
     )
 
+    forwarded = False
     for admin_id in settings.admin_ids:
         try:
             await bot.copy_message(
@@ -37,10 +51,17 @@ async def forward_to_admins(message: Message, bot: Bot) -> None:
                 caption=caption,
                 parse_mode="MarkdownV2",
             )
+            forwarded = True
         except Exception as e:
             logger.warning(f"[contact_admin] Не вдалося {admin_id}: {e}")
 
-    await message.answer(
-        "✅ Ваше повідомлення передано адміністрації\. Очікуйте відповіді\.",
-        parse_mode="MarkdownV2",
-    )
+    if forwarded:
+        await message.answer(
+            "✅ Ваше повідомлення передано адміністрації\. Очікуйте відповіді\.",
+            parse_mode="MarkdownV2",
+        )
+    else:
+        await message.answer(
+            "⚠️ Не вдалося надіслати повідомлення\. Спробуйте пізніше\.",
+            parse_mode="MarkdownV2",
+        )
