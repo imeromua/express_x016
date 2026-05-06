@@ -14,33 +14,10 @@ class Settings(BaseSettings):
 
     # Telegram
     bot_token: str
-    admin_ids: List[int] = []
     group_id: int
 
-    # PostgreSQL
-    postgres_host: str = "db"
-    postgres_port: int = 5432
-    postgres_db: str = "express_bot"
-    postgres_user: str = "bot_user"
-    postgres_password: str
-
-    # Redis
-    redis_host: str = "redis"
-    redis_port: int = 6379
-    redis_db: int = 0
-
-    # VirusTotal
-    virustotal_api_key: str = ""
-
-    # Timezone
-    timezone: str = "Europe/Kyiv"
-
-    # Throttling
-    schedule_request_cooldown: int = 5
-    broadcast_delay: float = 0.05
-
-    # Registration FSM timeout
-    registration_timeout_minutes: int = 10
+    # Admins: через кому "123,456"
+    admin_ids: List[int] = []
 
     @field_validator("admin_ids", mode="before")
     @classmethod
@@ -49,16 +26,17 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
 
-    @property
-    def postgres_dsn(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+    # Database
+    postgres_dsn: str  # postgresql+asyncpg://user:pass@host/db
 
-    @property
-    def redis_dsn(self) -> str:
-        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
+    # VirusTotal
+    virustotal_api_key: str = ""
+
+    # Broadcast
+    broadcast_delay: float = 0.05  # секунд між повідомленнями
 
 
 @lru_cache

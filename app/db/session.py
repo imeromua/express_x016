@@ -1,21 +1,28 @@
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from sqlalchemy.ext.asyncio import AsyncSession, AsyncEngine, async_sessionmaker
+from app.config import get_settings
 
-
-def get_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(engine, expire_on_commit=False)
+_engine = None
+_session_factory = None
 
 
-@asynccontextmanager
-async def get_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    """Context manager для ручного використання поза middleware."""
-    factory = get_session_factory(engine)
-    async with factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+def get_engine():
+    global _engine
+    if _engine is None:
+        settings = get_settings()
+        _engine = create_async_engine(
+            settings.postgres_dsn,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+        )
+    return _engine
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(
+            get_engine(), expire_on_commit=False
+        )
+    return _session_factory

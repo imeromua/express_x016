@@ -1,33 +1,80 @@
-import asyncio
+"""Точка входу. Запуск бота."""
 
+import asyncio
+import logging
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.redis import RedisStorage
 from loguru import logger
+from redis.asyncio import Redis
 
 from app.config import get_settings
-from app.bot import create_bot, create_dispatcher
-from app.db.connection import create_db_engine, dispose_engine
-from app.cache.connection import create_redis_pool, close_redis_pool
+from app.db.base import Base
+from app.db.session import get_engine
+from app.handlers import errors
+from app.handlers.admin.router import router as admin_router
+from app.handlers.group.router import router as group_router
+from app.handlers.user.onboarding import router as onboarding_router
+from app.handlers.user.schedule import router as schedule_router
+from app.middlewares.db import DbSessionMiddleware
+from app.middlewares.forbidden_words import ForbiddenWordsMiddleware
+from app.middlewares.redis import RedisMiddleware
+
+
+async def on_startup(bot: Bot) -> None:
+    """Ініціалізація БД та логування старту."""
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    me = await bot.get_me()
+    logger.info(f"Бот запущено: @{me.username} (id={me.id})")
+
+
+async def on_shutdown(bot: Bot) -> None:
+    logger.info("Бот зупиняється...")
+    await bot.session.close()
 
 
 async def main() -> None:
+    # Базове логування
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Старт...")
+
     settings = get_settings()
-    logger.info("🚀 Запуск бота Epicentr-Express Samar")
 
-    engine = await create_db_engine(settings.postgres_dsn)
-    redis = await create_redis_pool(settings.redis_dsn)
-    bot = await create_bot(settings.bot_token)
+    # Redis
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
 
-    # Передаємо bot в dispatcher, щоб ErrorHandlerMiddleware міг надсилати traceback адміну
-    dp = create_dispatcher(engine=engine, redis=redis, settings=settings, bot=bot)
+    # FSM storage — Redis
+    storage = RedisStorage(redis=redis)
 
-    try:
-        logger.info("✅ Бот запущено. Polling...")
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    finally:
-        logger.info("🛑 Зупинка бота...")
-        await close_redis_pool(redis)
-        await dispose_engine(engine)
-        await bot.session.close()
-        logger.info("✅ Бот зупинено.")
+    # Bot + Dispatcher
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    dp = Dispatcher(storage=storage)
+
+    # --- Middleware (порядок важливий) ---
+    dp.update.middleware(DbSessionMiddleware())
+    dp.update.middleware(RedisMiddleware(redis))
+    dp.message.middleware(ForbiddenWordsMiddleware())
+
+    # --- Роутери ---
+    dp.include_router(errors.router)       # помилки першими
+    dp.include_router(admin_router)
+    dp.include_router(onboarding_router)
+    dp.include_router(schedule_router)
+    dp.include_router(group_router)
+
+    # --- Хуки ---
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+
+    logger.info("Запуск polling...")
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":

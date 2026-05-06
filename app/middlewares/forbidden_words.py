@@ -1,37 +1,35 @@
-from typing import Any, Awaitable, Callable, Dict, List
+"""Middleware фільтрації заборонених слів.
+Зберігає список у Redis (TTL=1h) для швидкого доступу.
+При cache miss — читає з БД і оновлює кеш.
+"""
+
+import json
+from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message
 from aiogram.enums import ChatType
+from aiogram.types import Message, TelegramObject
+from loguru import logger
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Ключ Redis для кешу заборонених слів
+from app.repositories.setting import SettingRepository
+
 _CACHE_KEY = "moderation:forbidden_words"
-_CACHE_TTL = 300  # 5 хвилин
+_CACHE_TTL = 3600  # 1 година
 
 
 class ForbiddenWordsMiddleware(BaseMiddleware):
-    """
-    Перевіряє кожне повідомлення в групі на заборонені слова.
-    Список кешується в Redis (TTL=5 хв).
-    При срацюванні:
-      1. Видаляє повідомлення
-      2. Надсилає попередження юзеру в приватні
-    """
-
-    def __init__(self, redis: Redis) -> None:
-        self._redis = redis
-
     async def __call__(
         self,
-        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-        event: Message,
-        data: Dict[str, Any],
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
     ) -> Any:
         if not isinstance(event, Message):
             return await handler(event, data)
 
-        # Працюємо лише в групах
+        # Тільки групові чати
         if event.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
             return await handler(event, data)
 
@@ -39,46 +37,41 @@ class ForbiddenWordsMiddleware(BaseMiddleware):
         if not text:
             return await handler(event, data)
 
-        words = await self._get_forbidden_words(data)
-        matched = [w for w in words if w.lower() in text]
+        redis: Redis = data.get("redis")
+        session: AsyncSession = data.get("session")
+        if not redis or not session:
+            return await handler(event, data)
 
-        if matched:
-            bot = data.get("bot")
-            try:
-                await event.delete()
-            except Exception:
-                pass
+        words = await self._get_words(redis, session)
 
-            if bot and event.from_user:
+        for word in words:
+            if word in text:
+                logger.warning(
+                    f"[forbidden] Знайдено '{word}' від {event.from_user.id}"
+                )
                 try:
-                    await bot.send_message(
+                    await event.delete()
+                    await event.bot.send_message(
                         event.from_user.id,
-                        f"⚠️ Твоє повідомлення було видалено, "
-                        f"бо містило заборонені вирази\.
-"
-                        f"Будь ласка, дотримуйся правил спільноти\."    ,
+                        f"⚠️ Твоє повідомлення видалено: містило заборонене слово\."
+                        " Будь ласка, дотримуйся правил спільноти\.",
                         parse_mode="MarkdownV2",
                     )
-                except Exception:
-                    pass
-            return None  # зупиняємо обробку
+                except Exception as e:
+                    logger.error(f"[forbidden] Помилка видалення: {e}")
+                return  # Перериваємо обробку
 
         return await handler(event, data)
 
-    async def _get_forbidden_words(self, data: Dict[str, Any]) -> List[str]:
-        cached = await self._redis.get(_CACHE_KEY)
+    @staticmethod
+    async def _get_words(redis: Redis, session: AsyncSession) -> list[str]:
+        cached = await redis.get(_CACHE_KEY)
         if cached:
-            import json
-            return json.loads(cached)
-
-        # Беремо з БД через сесію, яка вже в data
-        session = data.get("session")
-        if session is None:
-            return []
-
-        from app.repositories.setting import SettingRepository
-        import json
+            try:
+                return json.loads(cached)
+            except json.JSONDecodeError:
+                pass
         repo = SettingRepository(session)
         words = await repo.get_forbidden_words()
-        await self._redis.setex(_CACHE_KEY, _CACHE_TTL, json.dumps(words))
+        await redis.setex(_CACHE_KEY, _CACHE_TTL, json.dumps(words, ensure_ascii=False))
         return words

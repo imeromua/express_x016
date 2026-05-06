@@ -1,47 +1,51 @@
-version: "3.11"
+version: "3.9"
 
 services:
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: unless-stopped
+    build: .
     env_file: .env
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./logs:/app/logs
-
-  db:
-    image: postgres:16-alpine
     restart: unless-stopped
+    networks:
+      - botnet
+
+  postgres:
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-botuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-botpass}
+      POSTGRES_DB: ${POSTGRES_DB:-epicentr_bot}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U botuser"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 5
+    networks:
+      - botnet
 
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
     command: redis-server --save 60 1 --loglevel warning
     volumes:
-      - redis_data:/data
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 5
+    networks:
+      - botnet
 
 volumes:
-  postgres_data:
-  redis_data:
+  pgdata:
+  redisdata:
+
+networks:
+  botnet:
+    driver: bridge
