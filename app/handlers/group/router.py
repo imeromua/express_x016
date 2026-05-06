@@ -1,7 +1,6 @@
-from aiogram import Router, F
-from aiogram.types import Message
-from aiogram.enums import ChatType
+from aiogram import Router
+
+from app.handlers.group import moderation
 
 router = Router(name="group")
-# Хендлер працює лише в групах
-# — фільтр підключимо в bot.py через middleware
+router.include_router(moderation.router)
