@@ -1,5 +1,4 @@
 import asyncio
-import logging
 
 from loguru import logger
 
@@ -11,15 +10,14 @@ from app.cache.connection import create_redis_pool, close_redis_pool
 
 async def main() -> None:
     settings = get_settings()
-
-    logging.basicConfig(level=logging.INFO)
     logger.info("🚀 Запуск бота Epicentr-Express Samar")
 
     engine = await create_db_engine(settings.postgres_dsn)
     redis = await create_redis_pool(settings.redis_dsn)
-
     bot = await create_bot(settings.bot_token)
-    dp = create_dispatcher(engine=engine, redis=redis, settings=settings)
+
+    # Передаємо bot в dispatcher, щоб ErrorHandlerMiddleware міг надсилати traceback адміну
+    dp = create_dispatcher(engine=engine, redis=redis, settings=settings, bot=bot)
 
     try:
         logger.info("✅ Бот запущено. Polling...")
