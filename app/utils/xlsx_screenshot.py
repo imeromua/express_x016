@@ -1,110 +1,144 @@
-"""Створення зображення з діапазону комірок Excel.
+"""Створення PNG з діапазону комірок Excel.
 
-Налаштування зберігається в БД через SettingRepository:
-  xlsx_path       — шлях до .xlsx файлу
-  xlsx_sheet      — назва аркуша (дефаулт: перший)
-  xlsx_cell_range — діапазон, напр. "A1:Z50"
-Якщо налаштування не задані — повертає None.
+Konfig зберігається в БД і завантажується в пам'ять при старті бота.
+Адмін може оновити налаштування без перезапуску через адмін-панель.
 """
 
-import io
+import asyncio
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
-# Глобальний кеш шляху до поточного Excel-файлу
-_current_xlsx_path: Optional[str] = None
-_current_sheet: Optional[str] = None
-_current_range: Optional[str] = None
+_config: dict = {"xlsx_path": None, "sheet": None, "cell_range": None}
 
 
 def set_xlsx_config(
-    xlsx_path: str,
+    xlsx_path: Optional[str],
     sheet: Optional[str] = None,
     cell_range: Optional[str] = None,
 ) -> None:
-    """Оновлює глобальний конфіг (admin панель викликає після імпорту)."""
-    global _current_xlsx_path, _current_sheet, _current_range
-    _current_xlsx_path = xlsx_path
-    _current_sheet = sheet
-    _current_range = cell_range
-    logger.info(f"[xlsx_screenshot] config updated: path={xlsx_path}, sheet={sheet}, range={cell_range}")
+    """Оновлює in-memory конфіг. Викликається при старті і після змін адміном."""
+    _config["xlsx_path"] = xlsx_path
+    _config["sheet"] = sheet
+    _config["cell_range"] = cell_range
+    logger.info(
+        f"[xlsx_screenshot] config: path={xlsx_path}, "
+        f"sheet={sheet}, range={cell_range}"
+    )
 
 
 async def make_schedule_screenshot() -> Optional[str]:
     """
-    Створює PNG-зображення з заданого діапазону комірок Excel-файлу.
+    Async-обгортка над синхронним рендерингом.
+    Виконує рендеринг у ThreadPoolExecutor щоб не блокувати event loop.
     Повертає шлях до PNG або None.
-    
-    Вимоги: openpyxl, Pillow
     """
-    if not _current_xlsx_path:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _render_sync)
+
+
+def _render_sync() -> Optional[str]:
+    """Синхронний рендеринг таблиці Excel → PNG."""
+    xlsx_path = _config.get("xlsx_path")
+    sheet_name = _config.get("sheet")
+    cell_range = _config.get("cell_range")
+
+    if not xlsx_path:
         logger.warning("[xlsx_screenshot] xlsx_path not configured")
         return None
 
-    xlsx_file = Path(_current_xlsx_path)
+    xlsx_file = Path(xlsx_path)
     if not xlsx_file.exists():
         logger.error(f"[xlsx_screenshot] file not found: {xlsx_file}")
         return None
 
     try:
         import openpyxl
-        from openpyxl.utils import column_index_from_string
         from PIL import Image, ImageDraw, ImageFont
 
         wb = openpyxl.load_workbook(xlsx_file, data_only=True)
-        ws = wb[_current_sheet] if _current_sheet and _current_sheet in wb.sheetnames else wb.active
-
-        # Визначаємо діапазон комірок
-        if _current_range:
-            try:
-                cells = list(ws[_current_range])
-            except Exception:
-                cells = list(ws.iter_rows())
+        if sheet_name and sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
         else:
-            cells = list(ws.iter_rows())
+            ws = wb.active
 
-        if not cells:
+        if cell_range:
+            try:
+                raw_cells = list(ws[cell_range])
+            except Exception:
+                raw_cells = list(ws.iter_rows())
+        else:
+            raw_cells = list(ws.iter_rows())
+
+        if not raw_cells:
+            logger.warning("[xlsx_screenshot] empty cell range")
             return None
 
-        # Збираємо дані з комірок
-        data = []
-        for row in cells:
-            data.append([str(cell.value or "") for cell in row])
+        data = [[str(c.value if c.value is not None else "") for c in row]
+                for row in raw_cells]
 
-        # Параметри рендерингу
-        CELL_W, CELL_H = 120, 30
-        PAD = 10
-        cols = max(len(r) for r in data) if data else 1
-        rows_count = len(data)
-        img_w = cols * CELL_W + PAD * 2
-        img_h = rows_count * CELL_H + PAD * 2
-
-        img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        # Спробуємо завантажити шрифт
+        # автоширина колонки за найдовшим значенням
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
-            font_bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            font = ImageFont.truetype(font_path, 13)
+            font_bold = ImageFont.truetype(font_bold_path, 13)
         except Exception:
             font = ImageFont.load_default()
             font_bold = font
 
-        # Малюємо таблицю
+        # вимірюємо ширини колонок
+        tmp_img = Image.new("RGB", (1, 1))
+        tmp_draw = ImageDraw.Draw(tmp_img)
+        col_widths = []
+        num_cols = max(len(r) for r in data) if data else 1
+        for ci in range(num_cols):
+            max_w = 60
+            for row in data:
+                if ci < len(row):
+                    val = row[ci][:30]
+                    try:
+                        bbox = tmp_draw.textbbox((0, 0), val, font=font)
+                        w = bbox[2] - bbox[0] + 16
+                    except Exception:
+                        w = len(val) * 8 + 16
+                    max_w = max(max_w, w)
+            col_widths.append(min(max_w, 200))
+
+        CELL_H = 28
+        PAD = 8
+        img_w = sum(col_widths) + PAD * 2
+        img_h = len(data) * CELL_H + PAD * 2
+
+        img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
         for ri, row in enumerate(data):
             y = PAD + ri * CELL_H
+            x = PAD
             for ci, val in enumerate(row):
-                x = PAD + ci * CELL_W
-                fill = (240, 240, 255) if ri == 0 else (255, 255, 255)
-                draw.rectangle([x, y, x + CELL_W - 1, y + CELL_H - 1],
-                               fill=fill, outline=(180, 180, 180))
+                w = col_widths[ci] if ci < len(col_widths) else 80
+                fill = (220, 230, 255) if ri == 0 else (
+                    (245, 245, 245) if ri % 2 == 0 else (255, 255, 255)
+                )
+                draw.rectangle(
+                    [x, y, x + w - 1, y + CELL_H - 1],
+                    fill=fill,
+                    outline=(180, 180, 200),
+                )
                 f = font_bold if ri == 0 else font
-                draw.text((x + 4, y + 6), val[:18], fill=(30, 30, 30), font=f)
+                draw.text(
+                    (x + 4, y + 6),
+                    val[:28],
+                    fill=(20, 20, 60),
+                    font=f,
+                )
+                x += w
 
         out_path = Path("/tmp/schedule_preview.png")
-        img.save(out_path, "PNG")
+        img.save(out_path, "PNG", optimize=True)
+        logger.info(f"[xlsx_screenshot] rendered {img_w}x{img_h} px -> {out_path}")
         return str(out_path)
 
     except ImportError as e:

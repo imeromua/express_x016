@@ -1,11 +1,12 @@
 """Тригерні слова в групі.
 
 Тригери:
-  "графік"              → скріншот Excel-файлу (діапазон комірок з налаштувань)
-  "графік <прізвище>" → текстовий графік конкретної людини з БД
-  "розклад"             → аліас для "графік"
-  "зміна"               → аліас для "графік"
-  "адмін" / "адміне" / ін. → пересилає повідомлення адмінам у приват
+  "графік"              → скріншот Excel-файлу (reply в групі)
+  "графік <прізвище>" → текстовий графік конкретної людини
+  "розклад" / "зміна"     → аліаси "графік"
+  "адмін" / "допоможіть"  → пересилає адмінам у приват
+
+Throttling: один запит графіка на 30 секунд на чат (не на юзера).
 """
 
 import re
@@ -15,10 +16,10 @@ from aiogram import Router, F, Bot
 from aiogram.enums import ChatType
 from aiogram.types import Message, FSInputFile
 from loguru import logger
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.repositories.setting import SettingRepository
 from app.services.schedule import ScheduleService
 from app.utils.schedule_formatter import format_schedule
 from app.utils.text import esc
@@ -26,15 +27,18 @@ from app.utils.xlsx_screenshot import make_schedule_screenshot
 
 router = Router(name="group:triggers")
 
-# Тригерні слова
-_SCHEDULE_WORDS = re.compile(
+_SCHEDULE_RE = re.compile(
     r"\b(графік|график|розклад|зміна|змина)\b",
     re.IGNORECASE | re.UNICODE,
 )
-_ADMIN_WORDS = re.compile(
-    r"\b(адмін|админ|потрібна допомога|допоможіть|допоможіть)\b",
+_ADMIN_RE = re.compile(
+    r"\b(адмін|админ|допоможіть|потрібна допомога)\b",
     re.IGNORECASE | re.UNICODE,
 )
+
+# Redis-ключ throttle: 1 скріншот на chat за 30 секунд
+_THROTTLE_TTL = 30
+_THROTTLE_KEY = "trigger:schedule:{chat_id}"
 
 
 @router.message(
@@ -45,58 +49,59 @@ async def handle_group_text(
     message: Message,
     bot: Bot,
     session: AsyncSession,
+    redis: Redis,
 ) -> None:
     text = message.text or ""
     lower = text.lower().strip()
 
-    # ─── Тригер "адмін" ────────────────────────────────────
-    if _ADMIN_WORDS.search(lower):
+    # ─── тригер "адмін" ───────────────────────────────────────
+    if _ADMIN_RE.search(lower):
         await _handle_admin_trigger(message, bot)
         return
 
-    # ─── Тригер "графік" ───────────────────────────────────
-    if _SCHEDULE_WORDS.search(lower):
-        await _handle_schedule_trigger(message, session, lower)
+    # ─── тригер "графік" ──────────────────────────────────────
+    if _SCHEDULE_RE.search(lower):
+        surname_part = _SCHEDULE_RE.sub("", lower).strip()
+        if not surname_part:
+            await _send_excel_screenshot(message, redis)
+        else:
+            await _send_personal_schedule(message, session, surname_part)
+
+
+async def _send_excel_screenshot(message: Message, redis: Redis) -> None:
+    """Throttle: один скріншот на 30с на весь чат."""
+    throttle_key = _THROTTLE_KEY.format(chat_id=message.chat.id)
+    if await redis.exists(throttle_key):
+        ttl = await redis.ttl(throttle_key)
+        await message.reply(
+            f"⏳ Графік вже був надісланий\. Повторний запит через *{ttl}* сек\.",
+            parse_mode="MarkdownV2",
+        )
         return
 
-
-async def _handle_schedule_trigger(
-    message: Message,
-    session: AsyncSession,
-    lower_text: str,
-) -> None:
-    """
-    Якщо текст містить тільки тригерне слово — скріншот всього графіка (Excel).
-    Якщо після тригерного слова є прізвище — текстовий графік конкретної людини.
-    """
-    # видаляємо тригерне слово, беремо решту
-    surname_part = _SCHEDULE_WORDS.sub("", lower_text).strip()
-
-    if not surname_part:
-        # Тільки слово "графік" — надсилаємо скріншот Excel
-        await _send_excel_screenshot(message)
-    else:
-        # є прізвище — шукаємо в БД
-        await _send_personal_schedule(message, session, surname_part)
-
-
-async def _send_excel_screenshot(message: Message) -> None:
-    """Надсилає скріншот Excel-файлу reply в групу."""
     try:
-        repo = None  # session немає тут — читаємо налаштування з БД в service
         img_path = await make_schedule_screenshot()
         if not img_path or not Path(img_path).exists():
-            await message.reply("⚠️ Графік наразі недоступний\. Зверніться до адміна\.",
-                               parse_mode="MarkdownV2")
+            await message.reply(
+                "⚠️ Графік наразі недоступний\. "
+                "Зверніться до адміна\.",
+                parse_mode="MarkdownV2",
+            )
             return
+
         await message.reply_photo(
             photo=FSInputFile(img_path),
             caption="📅 Актуальний графік",
         )
+        # встановлюємо throttle
+        await redis.setex(throttle_key, _THROTTLE_TTL, "1")
+
     except Exception as e:
         logger.error(f"[trigger:schedule] screenshot error: {e}")
-        await message.reply("⚠️ Не вдалося сформувати графік\. Спробуйте пізніше\.",
-                           parse_mode="MarkdownV2")
+        await message.reply(
+            "⚠️ Не вдалося сформувати графік\. Спробуйте пізніше\.",
+            parse_mode="MarkdownV2",
+        )
 
 
 async def _send_personal_schedule(
@@ -104,7 +109,7 @@ async def _send_personal_schedule(
     session: AsyncSession,
     surname: str,
 ) -> None:
-    """Текстовий графік конкретної людини reply в групу."""
+    """Reply з текстовим графіком конкретної людини."""
     svc = ScheduleService(session)
     pib = await svc.resolve_pib(surname)
     if not pib:
@@ -120,7 +125,7 @@ async def _send_personal_schedule(
 
 
 async def _handle_admin_trigger(message: Message, bot: Bot) -> None:
-    """Пересилає повідомлення адмінам у приват з caption-тегом."""
+    """Пересилає повідомлення адмінам у приват."""
     settings = get_settings()
     user = message.from_user
     tag = f"#user:{user.id}"

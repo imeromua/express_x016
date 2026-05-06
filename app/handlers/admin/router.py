@@ -6,7 +6,10 @@ from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.filters.is_admin import IsAdminFilter
-from app.handlers.admin import broadcast, reply_user, forbidden_words, import_schedule, xlsx_settings
+from app.handlers.admin import (
+    broadcast, reply_user, forbidden_words,
+    import_schedule, xlsx_settings, schedule_search,
+)
 from app.keyboards.admin import kb_admin_main_menu, kb_admin_panel_inline, kb_back_to_admin
 from app.repositories.user import UserRepository
 from app.states.admin import AdminStates
@@ -51,9 +54,8 @@ async def btn_worker_schedule(message: Message, state: FSMContext) -> None:
     await message.answer("🔍 Введіть прізвище працівника:")
 
 
-@router.message(F.text == "⚙️ Налаштування Excel")
+@router.message(F.text == "⚙️ Налаштування Excel", StateFilter(default_state))
 async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
-    repo = UserRepository(session)  # використовуємо session для setting repo
     from app.repositories.setting import SettingRepository
     srep = SettingRepository(session)
     cfg = await srep.get_xlsx_config()
@@ -71,7 +73,7 @@ async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
     )
 
 
-# ─── Inline callbacks ─────────────────────────────────────────
+# --- Inline callbacks ---
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery) -> None:
@@ -135,3 +137,4 @@ router.include_router(reply_user.router)
 router.include_router(forbidden_words.router)
 router.include_router(import_schedule.router)
 router.include_router(xlsx_settings.router)
+router.include_router(schedule_search.router)

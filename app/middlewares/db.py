@@ -7,12 +7,19 @@ from app.db.session import get_session_factory
 
 
 class DbSessionMiddleware(BaseMiddleware):
+    """Middleware дає session у кожен хендлер.
+    Також експозує session_factory для on_startup.
+    """
+
+    def __init__(self) -> None:
+        self.session_factory = get_session_factory()
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        async with get_session_factory()() as session:
+        async with self.session_factory() as session:
             data["session"] = session
             return await handler(event, data)
