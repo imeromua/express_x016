@@ -1,16 +1,12 @@
 """Онбординг: ChatJoinRequest → правила → "Погоджуюсь" → вступ в групу.
 
-Після вступу користувач отримує повідомлення з кнопкою "Перейти в групу".
-Подальша взаємодія — тільки через групу (тригери).
+FSM не використовується — весь флоу через один callback.
 """
 
 from aiogram import Router, F, Bot
-from aiogram.filters import StateFilter
-from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     ChatJoinRequest,
     CallbackQuery,
-    Message,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
@@ -18,10 +14,9 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.keyboards.registration import kb_consent, kb_remove
+from app.keyboards.registration import kb_consent
 from app.repositories.setting import SettingRepository
 from app.repositories.user import UserRepository
-from app.states.registration import RegistrationStates
 
 router = Router(name="user:onboarding")
 
@@ -41,8 +36,6 @@ async def handle_join_request(
 ) -> None:
     """Нова заявка на вступ: надсилаємо правила + кнопку згоди."""
     user = event.from_user
-    settings = get_settings()
-
     repo = SettingRepository(session)
     rules_text = await repo.get_onboarding_rules()
 
@@ -65,7 +58,7 @@ async def cb_consent_agree(
     bot: Bot,
     session: AsyncSession,
 ) -> None:
-    """Користувач погодився → схвалюємо заявку + пушаємо в групу."""
+    """Користувач погодився → схвалюємо заявку + зберігаємо в БД + кнопка в групу."""
     await callback.answer()
     settings = get_settings()
     user = callback.from_user
@@ -78,7 +71,6 @@ async def cb_consent_agree(
     except Exception as e:
         logger.warning(f"[onboarding] approve failed for {user.id}: {e}")
 
-    # Зберігаємо користувача в БД
     user_repo = UserRepository(session)
     await user_repo.upsert(
         user_id=user.id,
