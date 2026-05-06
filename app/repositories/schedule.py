@@ -25,11 +25,15 @@ class ScheduleRepository:
         )
         return list(result.scalars().all())
 
-    async def find_pib_by_surname(self, surname: str) -> Optional[str]:
-        """Пошук повного ПІБ за прізвищем (перший токен)."""
+    async def find_pib_exact(self, surname: str) -> Optional[str]:
+        """
+        Знаходить повне ПІБ за прізвищем (перший токен, case-insensitive).
+        Повертає None якщо не знайдено.
+        """
         result = await self._s.execute(
             select(Schedule.pib)
             .where(Schedule.pib.ilike(f"{surname}%"))
+            .order_by(Schedule.pib)
             .limit(1)
         )
         return result.scalar_one_or_none()
@@ -46,6 +50,7 @@ class ScheduleRepository:
                 set_={
                     "status": insert(Schedule).excluded.status,
                     "day_name": insert(Schedule).excluded.day_name,
+                    "is_working": insert(Schedule).excluded.is_working,
                 },
             )
         )

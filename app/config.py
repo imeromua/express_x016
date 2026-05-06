@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     bot_token: str
     group_id: int
 
-    # Admins: через кому "123,456"
+    # Admins
     admin_ids: List[int] = []
 
     @field_validator("admin_ids", mode="before")
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         return v
 
     # Database
-    postgres_dsn: str  # postgresql+asyncpg://user:pass@host/db
+    postgres_dsn: str
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -40,6 +40,9 @@ class Settings(BaseSettings):
 
     # Onboarding
     registration_timeout_minutes: int = 30
+
+    # Timezone
+    timezone: str = "Europe/Kyiv"
 
 
 @lru_cache
