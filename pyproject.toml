@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "express-x016-bot"
+version = "0.1.0"
+description = "Epicentr-Express Samar — Корпоративний Telegram-бот"
+requires-python = ">=3.11"
+
+dependencies = [
+    "aiogram==3.20.0",
+    "asyncpg==0.30.0",
+    "sqlalchemy[asyncio]==2.0.41",
+    "alembic==1.16.1",
+    "redis[hiredis]==5.3.0",
+    "apscheduler==3.11.0",
+    "pandas==2.2.3",
+    "openpyxl==3.1.5",
+    "aiohttp==3.11.18",
+    "pydantic-settings==2.9.1",
+    "loguru==0.7.3",
+    "pytz==2025.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.5",
+    "pytest-asyncio==0.26.0",
+    "pytest-mock==3.14.0",
+    "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
