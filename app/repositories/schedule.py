@@ -15,7 +15,7 @@ class ScheduleRepository:
         self._s = session
 
     async def get_upcoming(
-        self, pib: str, from_date: date, limit: int = 5
+        self, pib: str, from_date: date, limit: int = 7
     ) -> List[Schedule]:
         result = await self._s.execute(
             select(Schedule)
@@ -51,6 +51,7 @@ class ScheduleRepository:
                     "status": insert(Schedule).excluded.status,
                     "day_name": insert(Schedule).excluded.day_name,
                     "is_working": insert(Schedule).excluded.is_working,
+                    "shift_hours": insert(Schedule).excluded.shift_hours,
                 },
             )
         )

@@ -24,10 +24,13 @@ async def handle_xlsx_upload(
 ) -> None:
     doc: Document = message.document
     if doc.mime_type not in _ALLOWED_MIME and not (doc.file_name or "").lower().endswith(".xlsx"):
-        await message.answer("❌ Потрібний файл формату *\.xlsx*\.", parse_mode="MarkdownV2")
+        await message.answer(
+            r"❌ Потрібний файл формату *\.xlsx*\.",
+            parse_mode="MarkdownV2",
+        )
         return
 
-    status = await message.answer("⏳ Обробка файлу\.\.\.")
+    status = await message.answer(r"⏳ Обробка файлу\.\.\.", parse_mode="MarkdownV2")
     try:
         file = await bot.get_file(doc.file_id)
         file_bytes = await bot.download_file(file.file_path)
@@ -35,22 +38,31 @@ async def handle_xlsx_upload(
         rows = parse_schedule_xlsx(raw)
         svc = ScheduleService(session)
         count = await svc.import_from_rows(rows)
+
+        # Кількість унікальних співробітників
+        unique_employees = len({r["pib"] for r in rows})
+
         await status.edit_text(
-            f"✅ Імпорт завершено\! Оброблено: *{count}* записів",
+            rf"✅ Імпорт завершено\!\.\n"
+            rf"👥 Співробітників: *{unique_employees}*\n"
+            rf"📅 Записів у БД: *{count}*",
             reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )
-        logger.info(f"[import] {message.from_user.id}: {count} рядків з {doc.file_name!r}")
+        logger.info(
+            f"[import] {message.from_user.id}: {count} записів, "
+            f"{unique_employees} співробітників з {doc.file_name!r}"
+        )
     except XlsxParseError as e:
         await status.edit_text(
-            f"❌ Помилка парсингу: `{esc(str(e))}`",
+            rf"❌ Помилка парсингу: `{esc(str(e))}`",
             reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )
     except Exception as e:
-        logger.error(f"[import] {e}")
+        logger.exception(f"[import] {e}")
         await status.edit_text(
-            "❌ Неочікувана помилка при імпорті\.",
+            r"❌ Неочікувана помилка при імпорті\.",
             reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )

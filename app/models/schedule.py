@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -17,7 +17,10 @@ class Schedule(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     pib: Mapped[str] = mapped_column(String(200), nullable=False)
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
-    # is_working: True = робочий день, False = вихідний
+    # is_working: True = робочий день, False = вихідний/лікарняний/відпустка
     is_working: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # status: 'work' | 'off' | 'sick' | 'vacation'
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     day_name: Mapped[str] = mapped_column(String(20), nullable=False)
+    # shift_hours: кількість годин зміни (None якщо не робочий день)
+    shift_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
