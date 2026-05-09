@@ -34,15 +34,26 @@ class UserRepository:
         return result.scalar_one_or_none()
 
     async def get_by_phone(self, phone: str) -> Optional[User]:
-        """Пошук за нормалізованим номером телефону."""
         result = await self._s.execute(
             select(User).where(User.phone == phone)
         )
         return result.scalar_one_or_none()
 
+    async def get_all_active(self) -> List[User]:
+        result = await self._s.execute(
+            select(User).where(User.is_active == True).order_by(User.joined_at)  # noqa
+        )
+        return list(result.scalars().all())
+
+    async def get_all(self) -> List[User]:
+        result = await self._s.execute(
+            select(User).order_by(User.is_active.desc(), User.joined_at)
+        )
+        return list(result.scalars().all())
+
     async def get_all_active_ids(self) -> List[int]:
         result = await self._s.execute(
-            select(User.user_id).where(User.is_active == True)  # noqa: E712
+            select(User.user_id).where(User.is_active == True)  # noqa
         )
         return list(result.scalars().all())
 
@@ -51,6 +62,14 @@ class UserRepository:
             update(User)
             .where(User.user_id == user_id)
             .values(is_active=active)
+        )
+        await self._s.commit()
+
+    async def set_role(self, user_id: int, role: str) -> None:
+        await self._s.execute(
+            update(User)
+            .where(User.user_id == user_id)
+            .values(role=role)
         )
         await self._s.commit()
 
