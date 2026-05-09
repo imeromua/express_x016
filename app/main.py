@@ -20,6 +20,7 @@ from app.handlers.group.router import router as group_router
 from app.handlers.user.router import router as user_router
 from app.middlewares.db import DbSessionMiddleware
 from app.middlewares.forbidden_words import ForbiddenWordsMiddleware
+from app.middlewares.group_tracker import GroupTrackerMiddleware
 from app.middlewares.redis import RedisMiddleware
 from app.repositories.setting import SettingRepository
 from app.utils.xlsx_screenshot import set_xlsx_config
@@ -30,7 +31,6 @@ PRINT_SEP = "─" * 60
 
 
 async def _check_database(engine) -> bool:
-    """Перевірка підключення до PostgreSQL."""
     try:
         async with engine.begin() as conn:
             result = await conn.execute(text("SELECT version()"))
@@ -43,7 +43,6 @@ async def _check_database(engine) -> bool:
 
 
 async def _check_redis(redis: Redis) -> bool:
-    """Перевірка підключення до Redis."""
     try:
         pong = await redis.ping()
         logger.info(f"✅ Redis підключено   │ PING → {'PONG' if pong else '???'}")
@@ -54,12 +53,9 @@ async def _check_redis(redis: Redis) -> bool:
 
 
 async def _check_bot_token(bot: Bot) -> bool:
-    """Перевірка токена Telegram Bot API."""
     try:
         me = await bot.get_me()
-        logger.info(
-            f"✅ Bot Token OK      │ @{me.username} • id={me.id}"
-        )
+        logger.info(f"✅ Bot Token OK      │ @{me.username} • id={me.id}")
         return True
     except Exception as e:
         logger.error(f"❌ Bot Token хибний   │ {e}")
@@ -67,7 +63,6 @@ async def _check_bot_token(bot: Bot) -> bool:
 
 
 def _check_virustotal(settings) -> None:
-    """Логуємо наявність VirusTotal API ключа."""
     if settings.virustotal_api_key:
         masked = settings.virustotal_api_key[:6] + "****"
         logger.info(f"✅ VirusTotal API    │ ключ налаштовано ({masked})")
@@ -76,7 +71,6 @@ def _check_virustotal(settings) -> None:
 
 
 def _log_settings_summary(settings) -> None:
-    """Виводимо загальний summary налаштувань."""
     admin_list = ", ".join(str(a) for a in settings.admin_ids) or "не задано"
     dsn_masked = settings.postgres_dsn.split("@")[-1] if "@" in settings.postgres_dsn else "???"
     logger.info(f"ℹ️  Група           │ id={settings.group_id}")
@@ -88,7 +82,6 @@ def _log_settings_summary(settings) -> None:
 
 
 async def _load_xlsx_config_on_startup(session_factory) -> None:
-    """Завантажує налаштування Excel з БД при старті."""
     async with session_factory() as session:
         repo = SettingRepository(session)
         cfg = await repo.get_xlsx_config()
@@ -110,11 +103,9 @@ async def on_startup(bot: Bot, session_factory, redis: Redis) -> None:
     logger.info("🚀  EXPRESS BOT — СТАРТ")
     logger.info(PRINT_SEP)
 
-    # Налаштування
     _log_settings_summary(settings)
     logger.info(PRINT_SEP)
 
-    # Перевірка підключень
     engine = get_engine()
     await _check_database(engine)
     await _check_redis(redis)
@@ -123,12 +114,10 @@ async def on_startup(bot: Bot, session_factory, redis: Redis) -> None:
 
     logger.info(PRINT_SEP)
 
-    # Міграції / створення таблиць
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ Таблиці БД      │ синхронізовано")
 
-    # Excel-конфіг
     await _load_xlsx_config_on_startup(session_factory)
 
     logger.info(PRINT_SEP)
@@ -164,6 +153,8 @@ async def main() -> None:
     dp.update.middleware(db_middleware)
     dp.update.middleware(RedisMiddleware(redis))
     dp.message.middleware(ForbiddenWordsMiddleware())
+    # GroupTracker: реєструє кожного хто пише в групі
+    dp.message.middleware(GroupTrackerMiddleware())
 
     # Роутери: errors перший, admin до user (фільтр IsAdmin)
     dp.include_router(errors.router)
@@ -180,7 +171,14 @@ async def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    # chat_member потрібен для відстеження нових учасників групи
+    await dp.start_polling(
+        bot,
+        allowed_updates=[
+            *dp.resolve_used_update_types(),
+            "chat_member",
+        ],
+    )
 
 
 if __name__ == "__main__":

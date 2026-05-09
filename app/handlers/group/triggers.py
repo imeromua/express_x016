@@ -14,13 +14,14 @@ from pathlib import Path
 
 from aiogram import Router, F, Bot
 from aiogram.enums import ChatType
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, ChatMemberUpdated
 from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.repositories.schedule import ScheduleRepository
+from app.repositories.user import UserRepository
 from app.services.schedule import ScheduleService
 from app.utils.schedule_formatter import format_schedule
 from app.utils.text import esc
@@ -41,6 +42,43 @@ _THROTTLE_TTL = 30
 _THROTTLE_KEY = "trigger:schedule:{chat_id}"
 
 
+# ─── Авто-реєстрація при вході нового учасника ──────────────────────────
+
+@router.chat_member(
+    F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
+)
+async def handle_new_member(
+    event: ChatMemberUpdated,
+    session: AsyncSession,
+) -> None:
+    """Upsert користувача при вході до групи."""
+    settings = get_settings()
+    if event.chat.id != settings.group_id:
+        return
+
+    # Зареєструємо лише нових (не вихід із групи)
+    old_status = event.old_chat_member.status
+    new_status = event.new_chat_member.status
+    user = event.new_chat_member.user
+
+    if user.is_bot:
+        return
+
+    # member/restricted -> вхід до групи
+    if new_status in ("member", "restricted") and old_status in ("left", "kicked", "banned"):
+        try:
+            repo = UserRepository(session)
+            await repo.upsert(
+                user_id=user.id,
+                username=user.username,
+            )
+            logger.info(f"[GroupTracker] Новий учасник: {user.id} @{user.username}")
+        except Exception as e:
+            logger.warning(f"[GroupTracker] upsert new member error: {e}")
+
+
+# ─── Текстові повідомлення ────────────────────────────────────────────
+
 @router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
     F.text,
@@ -59,7 +97,6 @@ async def handle_group_text(
         return
 
     if _SCHEDULE_RE.search(lower):
-        # Видаляємо тригерне слово, залишаємо решту (прізвище)
         surname_part = _SCHEDULE_RE.sub("", text).strip()
         if not surname_part:
             await _send_excel_screenshot(message, redis)
@@ -105,8 +142,6 @@ async def _send_personal_schedule(
     session: AsyncSession,
     surname: str,
 ) -> None:
-    """Reply з текстовим графіком конкретної людини."""
-    # Спочатку знаходимо ПІБ за прізвищем
     repo = ScheduleRepository(session)
     pib = await repo.find_pib_exact(surname)
     if not pib:
