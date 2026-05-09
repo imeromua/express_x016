@@ -38,8 +38,8 @@ async def cb_my_schedule(
 
     if not user or not user.pib:
         await callback.message.answer(
-            "⚠️ Ваш профіль не прив\'язаний до графіку\."
-            " Зверніться до адміністратора\.",
+            r"⚠️ Ваш профіль не прив'язаний до графіку\."
+            r" Зверніться до адміністратора\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -49,8 +49,8 @@ async def cb_my_schedule(
 
     if not records:
         await callback.message.answer(
-            "📅 Графік на найближчі дні не знайдено\."
-            " Очікуйте імпорту адміном\.",
+            r"📅 Графік на найближчі дні не знайдено\."
+            r" Очікуйте імпорту адміном\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -82,7 +82,7 @@ async def receive_surname(
     # Захист від випадкових спрацювань
     if not surname or len(surname.split()) > 2:
         await message.answer(
-            "❌ Введіть лише прізвище \(1\-2 слова\)\.",
+            r"❌ Введіть лише прізвище \(1\-2 слова\)\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -90,7 +90,7 @@ async def receive_surname(
     if not await ThrottlingService.check_action(
         redis, message.from_user.id, "schedule", cooldown=5
     ):
-        await message.answer("⏳ Зачекайте 5 секунд перед наступним запитом\.", parse_mode="MarkdownV2")
+        await message.answer(r"⏳ Зачекайте 5 секунд перед наступним запитом\.", parse_mode="MarkdownV2")
         return
 
     svc = ScheduleService(session)
@@ -98,7 +98,7 @@ async def receive_surname(
 
     if not pib:
         await message.answer(
-            f"❌ Співробітника з прізвищем *{esc(surname)}* не знайдено\.",
+            rf"❌ Співробітника з прізвищем *{esc(surname)}* не знайдено\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -106,7 +106,7 @@ async def receive_surname(
     records = await svc.get_upcoming_for_pib(pib)
     if not records:
         await message.answer(
-            f"📅 Графік для *{esc(pib)}* на найближчі дні відсутній\.",
+            rf"📅 Графік для *{esc(pib)}* на найближчі дні відсутній\.",
             parse_mode="MarkdownV2",
         )
         return

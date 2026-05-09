@@ -33,7 +33,7 @@ async def btn_broadcast(message: Message, state: FSMContext) -> None:
     """Reply-кнопка — коректно приймає state."""
     await state.set_state(AdminStates.waiting_broadcast_text)
     await message.answer(
-        "📢 Надішліть повідомлення або медіа для розсилки\.",
+        r"📢 Надішліть повідомлення або медіа для розсилки\.",
         parse_mode="MarkdownV2",
     )
 
@@ -74,7 +74,7 @@ async def cb_broadcast_confirm(
 
     if not src_chat_id or not src_message_id:
         await callback.message.answer(
-            "❌ Дані розсилки втрачено\. Спробуйте ще раз\.",
+            r"❌ Дані розсилки втрачено\. Спробуйте ще раз\.",
             parse_mode="MarkdownV2",
         )
         return
@@ -85,7 +85,7 @@ async def cb_broadcast_confirm(
 
     sent = failed = 0
     status_msg = await callback.message.answer(
-        f"⏳ Розсилка\.\.\. \(0 / {len(user_ids)}\)",
+        rf"⏳ Розсилка\.\.\. \(0 / {len(user_ids)}\)",
         parse_mode="MarkdownV2",
     )
 
@@ -104,7 +104,7 @@ async def cb_broadcast_confirm(
         if i % 25 == 0:
             try:
                 await status_msg.edit_text(
-                    f"⏳ Розсилка\.\.\. \({i} / {len(user_ids)}\)",
+                    rf"⏳ Розсилка\.\.\. \({i} / {len(user_ids)}\)",
                     parse_mode="MarkdownV2",
                 )
             except Exception:
@@ -112,7 +112,7 @@ async def cb_broadcast_confirm(
         await asyncio.sleep(settings.broadcast_delay)
 
     await status_msg.edit_text(
-        f"✅ Завершено\! Відправлено: *{sent}* ✔️ Невдало: *{failed}* ❌",
+        rf"✅ Завершено\! Відправлено: *{sent}* ✔️ Невдало: *{failed}* ❌",
         reply_markup=kb_back_to_admin(),
         parse_mode="MarkdownV2",
     )
@@ -124,7 +124,7 @@ async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
     await state.clear()
     await callback.message.edit_text(
-        "❌ Розсилку скасовано\.",
+        r"❌ Розсилку скасовано\.",
         reply_markup=kb_back_to_admin(),
         parse_mode="MarkdownV2",
     )

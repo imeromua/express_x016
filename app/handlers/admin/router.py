@@ -64,7 +64,7 @@ async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
     cell_range = cfg.get("xlsx_cell_range") or "весь аркуш"
     from app.keyboards.admin import kb_xlsx_settings
     await message.answer(
-        f"⚙️ *Налаштування графіка \(Excel\)*\n\n"
+        rf"⚙️ *Налаштування графіка \(Excel\)*\n\n"
         f"📄 Файл: `{esc(path)}`\n"
         f"📄 Аркуш: `{esc(sheet)}`\n"
         f"📌 Діапазон: `{esc(cell_range)}`",
@@ -102,7 +102,7 @@ async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
     await state.set_state(AdminStates.waiting_broadcast_text)
     await callback.message.edit_text(
-        "📢 Надішліть повідомлення або медіа для розсилки\.",
+        r"📢 Надішліть повідомлення або медіа для розсилки\.",
         reply_markup=None,
         parse_mode="MarkdownV2",
     )
@@ -112,7 +112,7 @@ async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None
 async def cb_admin_import(callback: CallbackQuery) -> None:
     await callback.answer()
     await callback.message.edit_text(
-        "🗂 Надішліть *\.xlsx* файл графіка\.",
+        r"🗂 Надішліть *\.xlsx* файл графіка\.",
         reply_markup=None,
         parse_mode="MarkdownV2",
     )
