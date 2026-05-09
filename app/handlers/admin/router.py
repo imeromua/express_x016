@@ -11,6 +11,7 @@ from app.handlers.admin import (
     import_schedule, xlsx_settings, schedule_search, xlsx_preview,
 )
 from app.handlers.admin import users as users_handler
+from app.handlers.admin.statistics import get_stats_text
 from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin
 from app.repositories.user import UserRepository
 from app.states.admin import AdminStates
@@ -32,9 +33,7 @@ async def admin_start(message: Message) -> None:
     )
 
 
-# ─── Reply-кнопки (тільки в default_state) ────────────────────────────────────
-# ВАЖЛИВО: StateFilter(default_state) на КОЖНІЙ reply-кнопці запобігає
-# перехопленню тексту кнопок під час активного FSM-стану.
+# ─── Reply-кнопки (тільки в default_state) ────────────────────────────────────────
 
 @router.message(F.text == "📢 Розсилка", StateFilter(default_state))
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
@@ -62,13 +61,8 @@ async def btn_forbidden_admin(message: Message, session: AsyncSession) -> None:
 
 @router.message(F.text == "📊 Статистика", StateFilter(default_state))
 async def btn_stats(message: Message, session: AsyncSession) -> None:
-    repo = UserRepository(session)
-    total = await repo.count_active()
-    await message.answer(
-        f"📊 *Статистика*\n\n"
-        f"👥 Активних учасників: *{total}*",
-        parse_mode="MarkdownV2",
-    )
+    text = await get_stats_text(session)
+    await message.answer(text, parse_mode="MarkdownV2")
 
 
 @router.message(F.text == "📅 Графік працівника", StateFilter(default_state))
@@ -106,7 +100,7 @@ async def btn_users(message: Message, session: AsyncSession) -> None:
     )
 
 
-# ─── Inline callbacks ──────────────────────────────────────────────────────────
+# ─── Inline callbacks ──────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
@@ -127,10 +121,9 @@ async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "admin:stats")
 async def cb_admin_stats(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
-    repo = UserRepository(session)
-    total = await repo.count_active()
+    text = await get_stats_text(session)
     await callback.message.edit_text(
-        f"📊 *Статистика*\n\nАктивних учасників: *{total}*",
+        text,
         reply_markup=kb_back_to_admin(),
         parse_mode="MarkdownV2",
     )
@@ -165,7 +158,7 @@ async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> 
     await show_forbidden_list(callback.message, session)
 
 
-# ─── Інклюзія саб-роутерів ────────────────────────────────────────────────────
+# ─── Інклюзія саб-роутерів ────────────────────────────────────────────
 
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)
