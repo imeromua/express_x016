@@ -39,13 +39,16 @@ async def handle_xlsx_upload(
         svc = ScheduleService(session)
         count = await svc.import_from_rows(rows)
 
-        # Кількість унікальних співробітників
         unique_employees = len({r["pib"] for r in rows})
 
+        # MarkdownV2: ! і . потрібують екранування, перенос окремо в f-рядку
+        text = (
+            f"\u2705 Імпорт завершено\\!\n"
+            f"\U0001f465 Співробітників: *{unique_employees}*\n"
+            f"\U0001f4c5 Записів у БД: *{count}*"
+        )
         await status.edit_text(
-            rf"✅ Імпорт завершено\!\.\n"
-            rf"👥 Співробітників: *{unique_employees}*\n"
-            rf"📅 Записів у БД: *{count}*",
+            text,
             reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )
@@ -55,7 +58,7 @@ async def handle_xlsx_upload(
         )
     except XlsxParseError as e:
         await status.edit_text(
-            rf"❌ Помилка парсингу: `{esc(str(e))}`",
+            f"❌ Помилка парсингу: `{esc(str(e))}`",
             reply_markup=kb_back_to_admin(),
             parse_mode="MarkdownV2",
         )
