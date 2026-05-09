@@ -1,0 +1,26 @@
+[Unit]
+Description=Express Bot (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/express_x016
+
+# Запуск
+ExecStart=/usr/bin/docker compose up -d --build
+
+# Зупинка
+ExecStop=/usr/bin/docker compose down
+
+# Перезапуск
+ExecReload=/usr/bin/docker compose pull
+ExecReload=/usr/bin/docker compose up -d --build
+
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
