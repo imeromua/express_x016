@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.filters.is_admin import IsAdminFilter
 from app.handlers.admin import (
     broadcast, reply_user, forbidden_words,
-    import_schedule, xlsx_settings, schedule_search,
+    import_schedule, xlsx_settings, schedule_search, xlsx_preview,
 )
 from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin
 from app.repositories.user import UserRepository
@@ -31,7 +31,7 @@ async def admin_start(message: Message) -> None:
     )
 
 
-# ─── Reply-кнопки ──────────────────────────────────────────────────
+# ─── Reply-кнопки ──────────────────────────────────────────────────────────────────
 
 @router.message(F.text == "📢 Розсилка")
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
@@ -44,7 +44,6 @@ async def btn_broadcast(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == "📂 Імпорт графіка", StateFilter(default_state))
 async def btn_import_schedule(message: Message, state: FSMContext) -> None:
-    """Reply-кнопка — переводимо в стан очікування файлу."""
     await state.set_state(AdminStates.waiting_xlsx_import)
     await message.answer(
         r"🗂 Надішліть *\.xlsx* файл графіка\.",
@@ -77,24 +76,11 @@ async def btn_worker_schedule(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == "⚙️ Налаштування Excel", StateFilter(default_state))
 async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
-    from app.repositories.setting import SettingRepository
-    from app.keyboards.admin import kb_xlsx_settings
-    srep = SettingRepository(session)
-    cfg = await srep.get_xlsx_config()
-    path = cfg.get("xlsx_path") or "не задано"
-    sheet = cfg.get("xlsx_sheet") or "перший аркуш"
-    cell_range = cfg.get("xlsx_cell_range") or "весь аркуш"
-    await message.answer(
-        f"⚙️ *Налаштування графіка \\(Excel\\)*\n\n"
-        f"📄 Файл: `{esc(path)}`\n"
-        f"📄 Аркуш: `{esc(sheet)}`\n"
-        f"📌 Діапазон: `{esc(cell_range)}`",
-        reply_markup=kb_xlsx_settings(),
-        parse_mode="MarkdownV2",
-    )
+    from app.handlers.admin.xlsx_settings import _show_xlsx_menu
+    await _show_xlsx_menu(message, session)
 
 
-# ─── Inline callbacks ─────────────────────────────────────────────────
+# ─── Inline callbacks ───────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
@@ -153,9 +139,12 @@ async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> 
     await show_forbidden_list(callback.message, session)
 
 
+# ─── Інклюзія саб-роутерів ─────────────────────────────────────────────────────────────
+
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)
 router.include_router(forbidden_words.router)
 router.include_router(import_schedule.router)
 router.include_router(xlsx_settings.router)
+router.include_router(xlsx_preview.router)   # 📸 передпогляд скріншоту
 router.include_router(schedule_search.router)
