@@ -44,6 +44,9 @@ def kb_xlsx_settings() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📄 Аркуш", callback_data="xlsx:set_sheet"),
         ],
         [
+            InlineKeyboardButton(text="📸 Скріншот графіка", callback_data="xlsx:preview"),
+        ],
+        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back"),
         ],
     ])
@@ -67,4 +70,11 @@ def kb_forbidden_actions() -> InlineKeyboardMarkup:
 def kb_back_to_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="⬅️ Назад до панелі", callback_data="admin:back"),
+    ]])
+
+
+def kb_back_to_xlsx() -> InlineKeyboardMarkup:
+    """'<= Назад' після перегляду скріншоту."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ Назад до налаштувань", callback_data="admin:xlsx_settings"),
     ]])
