@@ -1,22 +1,32 @@
 """Створення PNG з діапазону комірок Excel.
 
-Піплайн: xlsx → LibreOffice headless → PDF → pdf2image → PNG (crop по діапазону)
+Піплайн:
+  xlsx -> LibreOffice headless -> PDF (1 сторінка, 200 dpi)
+       -> pdf2image -> PIL Image
+       -> crop по піксельних координатах діапазону
+       -> PNG
 Зберігає оригінальні кольори, шрифти, межі та стилі файлу.
 """
 
 import asyncio
-import subprocess
+import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from loguru import logger
 
 _config: dict = {"xlsx_path": None, "sheet": None, "cell_range": None}
-
-# Шлях до libreoffice / soffice
 _LO_BIN: str = shutil.which("libreoffice") or shutil.which("soffice") or "libreoffice"
+
+# Excel стандартні розміри за замовчуванням
+_DEFAULT_COL_WIDTH_PX = 64   # ~8.43 символи
+_DEFAULT_ROW_HEIGHT_PX = 20  # 15pt
+# Коефіцієнти переведення Excel одиниць → px (при 96 dpi)
+_COL_UNIT_TO_PX = 7.5        # 1 символ ~7.5px
+_ROW_PT_TO_PX = 96 / 72      # 1pt = 96/72 px
 
 
 def set_xlsx_config(
@@ -24,7 +34,6 @@ def set_xlsx_config(
     sheet: Optional[str] = None,
     cell_range: Optional[str] = None,
 ) -> None:
-    """in-memory конфіг. Викликається при старті та після змін адміном."""
     _config["xlsx_path"] = xlsx_path
     _config["sheet"] = sheet
     _config["cell_range"] = cell_range
@@ -35,28 +44,22 @@ def set_xlsx_config(
 
 
 async def make_schedule_screenshot() -> Optional[str]:
-    """
-    Async-обгортка. Виконує рендеринг у ThreadPoolExecutor.
-    Повертає шлях до PNG або None.
-    """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _render_sync)
 
 
+# ─── Допоміжні функції ─────────────────────────────────────────────
+
 def _col_letter_to_index(col: str) -> int:
-    """'A'->1, 'B'->2, 'AK'->37"""
-    col = col.upper()
+    """'A'->1, 'AK'->37"""
     result = 0
-    for ch in col:
+    for ch in col.upper():
         result = result * 26 + (ord(ch) - ord('A') + 1)
     return result
 
 
-def _parse_range(cell_range: str):
-    """
-    'B4:AK14' -> (col_start=2, row_start=4, col_end=37, row_end=14)
-    """
-    import re
+def _parse_range(cell_range: str) -> Optional[Tuple[int, int, int, int]]:
+    """'B4:AK14' -> (col_start=2, row_start=4, col_end=37, row_end=14)"""
     m = re.match(r'^([A-Z]+)(\d+):([A-Z]+)(\d+)$', cell_range.upper())
     if not m:
         return None
@@ -66,73 +69,59 @@ def _parse_range(cell_range: str):
     )
 
 
-def _set_print_area_and_convert(xlsx_path: Path, sheet_name: Optional[str],
-                                 cell_range: Optional[str], tmp_dir: Path) -> Optional[Path]:
+def _get_crop_box_px(
+    ws, col_start: int, row_start: int, col_end: int, row_end: int, dpi: int
+) -> Tuple[int, int, int, int]:
     """
-    1. Копіюємо xlsx в temp,
-    2. встановлюємо PrintArea = cell_range (openpyxl),
-    3. запускаємо LibreOffice headless -> PDF,
-    4. повертаємо Path до PDF.
+    Розраховує піксельні координати (left, top, right, bottom)
+    для crop за розмірами колонок/рядків з openpyxl.
+    dpi — роздільна здатність зображення PDF->PNG.
     """
-    import shutil as _shutil
-    import openpyxl
+    scale = dpi / 96.0  # коефіцієнт масштабування відносно Excel 96dpi
 
-    # Копіюємо файл щоб не псувати оригінал
-    tmp_xlsx = tmp_dir / xlsx_path.name
-    _shutil.copy2(xlsx_path, tmp_xlsx)
+    def col_width_px(ci: int) -> float:
+        """ci — 1-based індекс колонки"""
+        from openpyxl.utils import get_column_letter
+        col_letter = get_column_letter(ci)
+        cd = ws.column_dimensions.get(col_letter)
+        if cd and cd.width:
+            return cd.width * _COL_UNIT_TO_PX
+        return _DEFAULT_COL_WIDTH_PX
 
-    # Встановлюємо область друку = cell_range (без цього LO рендерить весь аркуш)
-    if cell_range:
-        try:
-            wb = openpyxl.load_workbook(tmp_xlsx)
-            if sheet_name and sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-            else:
-                ws = wb.active
-            ws.print_area = cell_range
-            # Масштабування: підгоняємо друк до 1 сторінки
-            ws.page_setup.fitToPage = True
-            ws.page_setup.fitToHeight = 1
-            ws.page_setup.fitToWidth = 1
-            ws.page_setup.orientation = "landscape"
-            ws.sheet_properties.pageSetUpPr.fitToPage = True
-            wb.save(tmp_xlsx)
-            logger.debug(f"[xlsx_screenshot] print_area set: {cell_range}")
-        except Exception as e:
-            logger.warning(f"[xlsx_screenshot] could not set print_area: {e}")
+    def row_height_px(ri: int) -> float:
+        """ri — 1-based індекс рядка"""
+        rd = ws.row_dimensions.get(ri)
+        if rd and rd.height:
+            return rd.height * _ROW_PT_TO_PX
+        return _DEFAULT_ROW_HEIGHT_PX
 
-    # LibreOffice headless: xlsx -> PDF
-    result = subprocess.run(
-        [
-            _LO_BIN, "--headless", "--norestore", "--nofirststartwizard",
-            "--convert-to", "pdf",
-            "--outdir", str(tmp_dir),
-            str(tmp_xlsx),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
+    # Відступ зліва: сума ширин колонок 1..(col_start-1)
+    left_px = sum(col_width_px(ci) for ci in range(1, col_start))
+    # Відступ згори: сума висот рядків 1..(row_start-1)
+    top_px = sum(row_height_px(ri) for ri in range(1, row_start))
+    # Права: + ширини колонок col_start..col_end
+    right_px = left_px + sum(col_width_px(ci) for ci in range(col_start, col_end + 1))
+    # Низ: + висоти рядків row_start..row_end
+    bottom_px = top_px + sum(row_height_px(ri) for ri in range(row_start, row_end + 1))
+
+    return (
+        int(left_px * scale),
+        int(top_px * scale),
+        int(right_px * scale),
+        int(bottom_px * scale),
     )
-    if result.returncode != 0:
-        logger.error(f"[xlsx_screenshot] LibreOffice error: {result.stderr}")
-        return None
 
-    pdf_path = tmp_dir / (tmp_xlsx.stem + ".pdf")
-    if not pdf_path.exists():
-        logger.error(f"[xlsx_screenshot] PDF not found: {pdf_path}")
-        return None
 
-    logger.debug(f"[xlsx_screenshot] PDF ready: {pdf_path}")
-    return pdf_path
-
+# ─── Головна функція рендерингу ──────────────────────────────────────
 
 def _render_sync() -> Optional[str]:
     """xlsx → PDF (LibreOffice) → PNG (pdf2image) → crop по діапазону."""
+    import openpyxl
     from pdf2image import convert_from_path
 
     xlsx_path = _config.get("xlsx_path")
     sheet_name = _config.get("sheet")
-    cell_range = _config.get("cell_range")
+    cell_range = (_config.get("cell_range") or "").strip().upper()
 
     if not xlsx_path:
         logger.warning("[xlsx_screenshot] xlsx_path not configured")
@@ -143,27 +132,71 @@ def _render_sync() -> Optional[str]:
         logger.error(f"[xlsx_screenshot] file not found: {xlsx_file}")
         return None
 
+    # Читаємо розміри колонок/рядків до конвертації
+    parsed = _parse_range(cell_range) if cell_range else None
+    crop_ws = None
+    if parsed:
+        try:
+            wb = openpyxl.load_workbook(xlsx_file, data_only=True)
+            crop_ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+        except Exception as e:
+            logger.warning(f"[xlsx_screenshot] could not read dimensions: {e}")
+
+    DPI = 200
+
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp_dir = Path(tmp_str)
+        tmp_xlsx = tmp_dir / xlsx_file.name
+        shutil.copy2(xlsx_file, tmp_xlsx)
 
-        # Конвертуємо xlsx → PDF
-        pdf_path = _set_print_area_and_convert(xlsx_file, sheet_name, cell_range, tmp_dir)
-        if not pdf_path:
+        # LibreOffice: xlsx → PDF (весь аркуш, без обмежень)
+        lo_result = subprocess.run(
+            [
+                _LO_BIN, "--headless", "--norestore", "--nofirststartwizard",
+                "--convert-to", "pdf",
+                "--outdir", str(tmp_dir),
+                str(tmp_xlsx),
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        if lo_result.returncode != 0:
+            logger.error(f"[xlsx_screenshot] LibreOffice error: {lo_result.stderr}")
             return None
 
-        # PDF → PIL Image (перша сторінка, 200 dpi)
+        pdf_path = tmp_dir / (tmp_xlsx.stem + ".pdf")
+        if not pdf_path.exists():
+            logger.error(f"[xlsx_screenshot] PDF not found: {pdf_path}")
+            return None
+
+        # PDF → PIL Image
         try:
-            pages = convert_from_path(str(pdf_path), dpi=200, first_page=1, last_page=1)
+            pages = convert_from_path(str(pdf_path), dpi=DPI, first_page=1, last_page=1)
         except Exception as e:
             logger.error(f"[xlsx_screenshot] pdf2image error: {e}")
             return None
 
         if not pages:
-            logger.error("[xlsx_screenshot] pdf2image: no pages")
             return None
 
         img = pages[0]
-        logger.info(f"[xlsx_screenshot] rendered {img.width}x{img.height}px from PDF")
+        logger.info(f"[xlsx_screenshot] full page: {img.width}x{img.height}px")
+
+        # Crop по діапазону
+        if parsed and crop_ws is not None:
+            col_start, row_start, col_end, row_end = parsed
+            box = _get_crop_box_px(crop_ws, col_start, row_start, col_end, row_end, DPI)
+            logger.info(f"[xlsx_screenshot] crop box px: {box}")
+
+            # Перевіряємо межі
+            left, top, right, bottom = box
+            right = min(right, img.width)
+            bottom = min(bottom, img.height)
+
+            if right > left and bottom > top:
+                img = img.crop((left, top, right, bottom))
+                logger.info(f"[xlsx_screenshot] cropped: {img.width}x{img.height}px")
+            else:
+                logger.warning(f"[xlsx_screenshot] invalid crop box {box}, using full page")
 
         # Зберігаємо PNG
         out = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
