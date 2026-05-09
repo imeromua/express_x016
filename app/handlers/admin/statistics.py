@@ -7,7 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
-from sqlalchemy import func, select
+from sqlalchemy import Integer, cast, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.filters.is_admin import IsAdminFilter
@@ -60,10 +60,10 @@ async def get_general_stats_text(session: AsyncSession) -> str:
         f"{esc(str(min_date))} — {esc(str(max_date))}"
         if min_date and max_date else r"_немає даних_"
     )
-    today_str = esc(today.strftime("%d\.%m\.%Y"))
+    today_str = esc(today.strftime("%d.%m.%Y"))
 
     return (
-        f"\U0001f4ca *Статистика* \u2014 {today_str}\n\n"
+        f"📊 *Статистика* — {today_str}\n\n"
         f"*👥 Користувачі*\n"
         f"• Всього в БД: *{total_users}*\n"
         f"• Активних: *{active_users}* ✅\n"
@@ -81,26 +81,24 @@ async def get_general_stats_text(session: AsyncSession) -> str:
 
 # ─── Статистика по працівнику ─────────────────────────────────────────
 
-async def get_employee_stats(
-    session: AsyncSession, pib: str
-) -> Optional[str]:
-    """SQL-агрегація по pib."""
+async def get_employee_stats(session: AsyncSession, pib: str) -> Optional[str]:
+    """SQL-агрегація по pib. Використовуємо case() замість func.cast."""
     rows = (await session.execute(
         select(
             Schedule.pib,
             func.count().label("total"),
             func.sum(
-                func.cast(Schedule.is_working == True, func.Integer())  # noqa
+                case((Schedule.is_working == True, 1), else_=0)  # noqa: E712
             ).label("work_days"),
             func.coalesce(func.sum(Schedule.shift_hours), 0).label("total_hours"),
             func.sum(
-                func.cast(Schedule.status == "vacation", func.Integer())
+                case((Schedule.status == "vacation", 1), else_=0)
             ).label("vacation"),
             func.sum(
-                func.cast(Schedule.status == "sick", func.Integer())
+                case((Schedule.status == "sick", 1), else_=0)
             ).label("sick"),
             func.sum(
-                func.cast(Schedule.status == "off", func.Integer())
+                case((Schedule.status == "off", 1), else_=0)
             ).label("off_days"),
         )
         .where(Schedule.pib.ilike(f"%{pib}%"))
@@ -113,7 +111,6 @@ async def get_employee_stats(
 
     results = []
     for row in rows:
-        rest = (row.total or 0) - (row.work_days or 0)
         results.append(
             f"*👤 {esc(row.pib)}*\n"
             f"• Записів у графіку: *{row.total}*\n"
@@ -145,8 +142,8 @@ async def cb_stats_by_employee(callback: CallbackQuery, state: FSMContext) -> No
     await callback.answer()
     await state.set_state(AdminStates.waiting_stats_employee)
     await callback.message.edit_text(
-        r"🔍 Введіть прізвище або частину ПІБ працівника:"
-        r" Для виходу натисніть \/cancel\.",
+        "🔍 Введіть прізвище або частину ПІБ працівника\."
+        " Для виходу натисніть \/cancel\.",
         reply_markup=None,
         parse_mode="MarkdownV2",
     )
