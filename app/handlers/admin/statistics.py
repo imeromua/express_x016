@@ -1,13 +1,11 @@
 """Statistics handler — реальна статистика по учасниках і графіку."""
 
 from datetime import date
-from typing import Optional
 
 from aiogram import Router, F
-from aiogram.filters import StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
-from sqlalchemy import Integer, case, func, select
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.filters.is_admin import IsAdminFilter
@@ -15,7 +13,6 @@ from app.keyboards.admin import kb_stats_menu, kb_pib_picker
 from app.models.schedule import Schedule
 from app.models.user import User
 from app.repositories.schedule import ScheduleRepository
-from app.states.admin import AdminStates
 from app.utils.text import esc
 
 router = Router(name="admin:statistics")
@@ -23,6 +20,15 @@ router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
 _STATS_PIB_PREFIX = "stats_pib"
+
+
+async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
+    """Редагуємо повідомлення, ігноруючи 'не змінено'."""
+    try:
+        await callback.message.edit_text(text, **kwargs)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 # ─── Загальна статистика ────────────────────────────────────────────────
@@ -76,7 +82,7 @@ async def get_general_stats_text(session: AsyncSession) -> str:
 
 
 async def get_employee_stats_by_pib(session: AsyncSession, pib: str) -> str:
-    rows = (await session.execute(
+    row = (await session.execute(
         select(
             Schedule.pib,
             func.count().label("total"),
@@ -90,17 +96,17 @@ async def get_employee_stats_by_pib(session: AsyncSession, pib: str) -> str:
         .group_by(Schedule.pib)
     )).fetchone()
 
-    if not rows:
+    if not row:
         return f"❌ Даних для *{esc(pib)}* не знайдено\."
 
     return (
-        f"*👤 {esc(rows.pib)}*\n"
-        f"• Записів у графіку: *{rows.total}*\n"
-        f"• Робочих днів: *{rows.work_days or 0}* 🟢\n"
-        f"• Вихідних днів: *{rows.off_days or 0}* ⚪\n"
-        f"• Відпусток: *{rows.vacation or 0}* 🏖\n"
-        f"• Лікарняних: *{rows.sick or 0}* 🏥\n"
-        f"• Годин робочих: *{rows.total_hours or 0}* ⏰\n"
+        f"*👤 {esc(row.pib)}*\n"
+        f"• Записів у графіку: *{row.total}*\n"
+        f"• Робочих днів: *{row.work_days or 0}* 🟢\n"
+        f"• Вихідних днів: *{row.off_days or 0}* ⚪\n"
+        f"• Відпусток: *{row.vacation or 0}* 🏖\n"
+        f"• Лікарняних: *{row.sick or 0}* 🏥\n"
+        f"• Годин робочих: *{row.total_hours or 0}* ⏰\n"
     )
 
 
@@ -110,58 +116,42 @@ async def get_employee_stats_by_pib(session: AsyncSession, pib: str) -> str:
 async def cb_stats_general(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     text = await get_general_stats_text(session)
-    await callback.message.edit_text(text, reply_markup=kb_stats_menu(), parse_mode="MarkdownV2")
+    await _safe_edit(callback, text, reply_markup=kb_stats_menu(), parse_mode="MarkdownV2")
 
 
 @router.callback_query(F.data == "stats:by_employee")
-async def cb_stats_by_employee(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
+async def cb_stats_by_employee(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     repo = ScheduleRepository(session)
     pib_list = await repo.get_all_unique_pib()
-
     if not pib_list:
         await callback.answer("⚠️ Графік порожній", show_alert=True)
         return
-
-    kb = kb_pib_picker(
-        pib_list=pib_list,
-        callback_prefix=_STATS_PIB_PREFIX,
-        page=0,
-        back_cb="stats:general",
-    )
-    await callback.message.edit_text(
-        "👤 Оберіть працівника:",
-        reply_markup=kb,
-    )
+    kb = kb_pib_picker(pib_list, _STATS_PIB_PREFIX, page=0, back_cb="stats:general")
+    await _safe_edit(callback, "👤 Оберіть працівника:", reply_markup=kb)
 
 
 @router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:page:(\d+)$"))
-async def cb_stats_pib_page(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
+async def cb_stats_pib_page(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     page = int(callback.data.split(":")[2])
     repo = ScheduleRepository(session)
     pib_list = await repo.get_all_unique_pib()
-    kb = kb_pib_picker(
-        pib_list=pib_list,
-        callback_prefix=_STATS_PIB_PREFIX,
-        page=page,
-        back_cb="stats:general",
-    )
-    await callback.message.edit_reply_markup(reply_markup=kb)
+    kb = kb_pib_picker(pib_list, _STATS_PIB_PREFIX, page=page, back_cb="stats:general")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 @router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:(?!page:).+$"))
-async def cb_stats_pib_select(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
+async def cb_stats_pib_select(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     pib = callback.data[len(_STATS_PIB_PREFIX) + 1:]
     text = await get_employee_stats_by_pib(session, pib)
-    await callback.message.edit_text(
+    await _safe_edit(
+        callback,
         f"📊 *Статистика по працівнику*\n\n{text}",
         reply_markup=kb_stats_menu(),
         parse_mode="MarkdownV2",
