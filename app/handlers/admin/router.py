@@ -31,7 +31,7 @@ async def admin_start(message: Message) -> None:
     )
 
 
-# ─── Reply-кнопки (головне меню) ────────────────────────────────────────
+# ─── Reply-кнопки ──────────────────────────────────────────────────
 
 @router.message(F.text == "📢 Розсилка")
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
@@ -43,7 +43,9 @@ async def btn_broadcast(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == "📂 Імпорт графіка", StateFilter(default_state))
-async def btn_import_schedule(message: Message) -> None:
+async def btn_import_schedule(message: Message, state: FSMContext) -> None:
+    """Reply-кнопка — переводимо в стан очікування файлу."""
+    await state.set_state(AdminStates.waiting_xlsx_import)
     await message.answer(
         r"🗂 Надішліть *\.xlsx* файл графіка\.",
         parse_mode="MarkdownV2",
@@ -92,12 +94,12 @@ async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
     )
 
 
-# ─── Inline callbacks ───────────────────────────────────────────────────────
+# ─── Inline callbacks ─────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
-async def cb_admin_back(callback: CallbackQuery) -> None:
-    """Back — видаляємо inline-повідомлення і відновлюємо reply-меню."""
+async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.clear()
     try:
         await callback.message.delete()
     except Exception:
@@ -134,8 +136,9 @@ async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None
 
 
 @router.callback_query(F.data == "admin:import")
-async def cb_admin_import(callback: CallbackQuery) -> None:
+async def cb_admin_import(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.set_state(AdminStates.waiting_xlsx_import)
     await callback.message.edit_text(
         r"🗂 Надішліть *\.xlsx* файл графіка\.",
         reply_markup=None,
@@ -149,9 +152,6 @@ async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> 
     from app.handlers.admin.forbidden_words import show_forbidden_list
     await show_forbidden_list(callback.message, session)
 
-
-# ВАЖЛИВО: admin:xlsx_settings обробляється виключно в xlsx_settings.router
-# Тут не реєструємо, щоб уникнути дублювання.
 
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)

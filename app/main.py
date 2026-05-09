@@ -1,4 +1,4 @@
-"""Точка входу. Налаштуває bot, dispatcher, middleware, роутери."""
+"""Точка входу. Налаштовує bot, dispatcher, middleware, роутери."""
 
 import asyncio
 import logging
@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from loguru import logger
 from redis.asyncio import Redis
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.db.base import Base
@@ -24,6 +25,68 @@ from app.repositories.setting import SettingRepository
 from app.utils.xlsx_screenshot import set_xlsx_config
 
 
+# ───────────────────────────────────────────────────────────────────────────
+PRINT_SEP = "─" * 60
+
+
+async def _check_database(engine) -> bool:
+    """Перевірка підключення до PostgreSQL."""
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(text("SELECT version()"))
+            version = result.scalar()
+            logger.info(f"✅ БД підключена  │ {version[:60]}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ БД недоступна  │ {e}")
+        return False
+
+
+async def _check_redis(redis: Redis) -> bool:
+    """Перевірка підключення до Redis."""
+    try:
+        pong = await redis.ping()
+        logger.info(f"✅ Redis підключено   │ PING → {'PONG' if pong else '???'}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Redis недоступний  │ {e}")
+        return False
+
+
+async def _check_bot_token(bot: Bot) -> bool:
+    """Перевірка токена Telegram Bot API."""
+    try:
+        me = await bot.get_me()
+        logger.info(
+            f"✅ Bot Token OK      │ @{me.username} • id={me.id}"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"❌ Bot Token хибний   │ {e}")
+        return False
+
+
+def _check_virustotal(settings) -> None:
+    """Логуємо наявність VirusTotal API ключа."""
+    if settings.virustotal_api_key:
+        masked = settings.virustotal_api_key[:6] + "****"
+        logger.info(f"✅ VirusTotal API    │ ключ налаштовано ({masked})")
+    else:
+        logger.warning("⚠️  VirusTotal API    │ ключ не задано, перевірка відключена")
+
+
+def _log_settings_summary(settings) -> None:
+    """Виводимо загальний summary налаштувань."""
+    admin_list = ", ".join(str(a) for a in settings.admin_ids) or "не задано"
+    dsn_masked = settings.postgres_dsn.split("@")[-1] if "@" in settings.postgres_dsn else "???"
+    logger.info(f"ℹ️  Група           │ id={settings.group_id}")
+    logger.info(f"ℹ️  Адміни           │ {admin_list}")
+    logger.info(f"ℹ️  DB DSN            │ ...@{dsn_masked}")
+    logger.info(f"ℹ️  Redis URL         │ {settings.redis_url}")
+    logger.info(f"ℹ️  Таймзон             │ {settings.timezone}")
+    logger.info(f"ℹ️  Затримка розсилки   │ {settings.broadcast_delay}s")
+
+
 async def _load_xlsx_config_on_startup(session_factory) -> None:
     """Завантажує налаштування Excel з БД при старті."""
     async with session_factory() as session:
@@ -35,27 +98,52 @@ async def _load_xlsx_config_on_startup(session_factory) -> None:
                 sheet=cfg.get("xlsx_sheet"),
                 cell_range=cfg.get("xlsx_cell_range"),
             )
-            logger.info(f"[startup] Excel config loaded: {cfg}")
+            logger.info(f"✅ Excel config      │ {cfg['xlsx_path']}")
         else:
-            logger.warning("[startup] Excel config not set. Use admin panel to configure.")
+            logger.warning("⚠️  Excel config      │ не задано, налаштуйте через адмін-панель")
 
 
-async def on_startup(bot: Bot, session_factory) -> None:
+async def on_startup(bot: Bot, session_factory, redis: Redis) -> None:
+    settings = get_settings()
+
+    logger.info(PRINT_SEP)
+    logger.info("🚀  EXPRESS BOT — СТАРТ")
+    logger.info(PRINT_SEP)
+
+    # Налаштування
+    _log_settings_summary(settings)
+    logger.info(PRINT_SEP)
+
+    # Перевірка підключень
     engine = get_engine()
+    await _check_database(engine)
+    await _check_redis(redis)
+    await _check_bot_token(bot)
+    _check_virustotal(settings)
+
+    logger.info(PRINT_SEP)
+
+    # Міграції / створення таблиць
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("✅ Таблиці БД      │ синхронізовано")
+
+    # Excel-конфіг
     await _load_xlsx_config_on_startup(session_factory)
-    me = await bot.get_me()
-    logger.info(f"Бот запущено: @{me.username} (id={me.id})")
+
+    logger.info(PRINT_SEP)
+    logger.info("✅  Бот готовий, поллінг запущено")
+    logger.info(PRINT_SEP)
 
 
 async def on_shutdown(bot: Bot) -> None:
-    logger.info("Бот зупиняється...")
+    logger.info(PRINT_SEP)
+    logger.info("⏹️  Бот зупиняється...")
     await bot.session.close()
-
     engine = get_engine()
     await engine.dispose()
-    logger.info("Підключення до бази даних закрито")
+    logger.info("✅ Підключення закрито")
+    logger.info(PRINT_SEP)
 
 
 async def main() -> None:
@@ -83,9 +171,8 @@ async def main() -> None:
     dp.include_router(user_router)
     dp.include_router(group_router)
 
-    # Виправлено: передаємо coroutine-функції через обгортки з аргументами
     async def _on_startup() -> None:
-        await on_startup(bot, db_middleware.session_factory)
+        await on_startup(bot, db_middleware.session_factory, redis)
 
     async def _on_shutdown() -> None:
         await on_shutdown(bot)
@@ -93,7 +180,6 @@ async def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
-    logger.info("Поллінг запущено")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
