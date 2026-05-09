@@ -1,26 +1,32 @@
 [Unit]
-Description=Express Bot (Docker Compose)
-Requires=docker.service
-After=docker.service network-online.target
+Description=Express Samar Bot
+After=network-online.target postgresql.service redis.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=/opt/express_x016
+Type=simple
+User=ubuntu
+Group=ubuntu
 
-# Запуск
-ExecStart=/usr/bin/docker compose up -d --build
+# Папка з кодом (deзмініть на реальний шлях)
+WorkingDirectory=/home/ubuntu/express_x016
 
-# Зупинка
-ExecStop=/usr/bin/docker compose down
+# Віртуальне середовище (deзмініть на реальний шлях)
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/express_x016/.env
 
-# Перезапуск
-ExecReload=/usr/bin/docker compose pull
-ExecReload=/usr/bin/docker compose up -d --build
+# Команда запуску
+ExecStart=/home/ubuntu/express_x016/.venv/bin/python -m app.main
 
-TimeoutStartSec=300
-TimeoutStopSec=30
+# Автоперезапуск при падінні
+# on-failure: перезапуск тільки при помилках, не при systemctl stop
+Restart=on-failure
+RestartSec=10
+
+# Логування: вивід journald (див. journalctl -u express-bot -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=express-bot
 
 [Install]
 WantedBy=multi-user.target

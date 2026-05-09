@@ -1,42 +1,52 @@
 #!/usr/bin/env bash
 # =============================================================
-# install.sh — установка express-bot як systemd-сервісу
+# install.sh — реєстрація systemd-сервісу express-bot
 # Запуск: sudo bash deploy/install.sh
 # =============================================================
 set -euo pipefail
 
-APP_DIR="/opt/express_x016"
 SERVICE_NAME="express-bot"
-SERVICE_FILE="deploy/express-bot.service"
+SERVICE_SRC="$(dirname "$0")/express-bot.service"
 SYSTEMD_DIR="/etc/systemd/system"
 
-echo "➤ Перевіряємо Docker..."
-if ! command -v docker &>/dev/null; then
-  echo "❌ Docker не знайдено. Встановіть: https://docs.docker.com/engine/install/"
+# ---- Перевірки -------------------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+  echo "❌ Запустіть з правами root: sudo bash deploy/install.sh"
   exit 1
 fi
 
-echo "➤ Створюємо папку ${APP_DIR}..."
-mkdir -p "${APP_DIR}"
+if [[ ! -f "$SERVICE_SRC" ]]; then
+  echo "❌ Файл не знайдено: $SERVICE_SRC"
+  exit 1
+fi
 
-echo "➤ Копіюємо файли проекту в ${APP_DIR}..."
-# rsync зберігає структуру і не стирає .env
-rsync -av --exclude='.git' --exclude='__pycache__' \
-      --exclude='*.pyc' --exclude='.env' \
-      ./ "${APP_DIR}/"
+# ---- Налаштування шляху (WorkingDirectory) ---------------------------
+echo ""
+echo "ℹ️  Відкрийте deploy/express-bot.service і перевірте:"
+echo "     - User=        (поточний користувач: $(logname 2>/dev/null || echo ubuntu))"
+echo "     - WorkingDirectory= (повний шлях до проекту)"
+echo "     - ExecStart=    (шлях до python у venv)"
+echo ""
+read -r -p "Тисніть Enter коли все налаштовано..."
 
-echo "➤ Встановлюємо systemd-сервіс..."
-cp "${APP_DIR}/${SERVICE_FILE}" "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
+# ---- Інсталяція ----------------------------------------------------------
+echo "➤ Копіюємо $SERVICE_SRC → $SYSTEMD_DIR/${SERVICE_NAME}.service"
+cp "$SERVICE_SRC" "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
 
+echo "➤ systemctl daemon-reload"
 systemctl daemon-reload
+
+echo "➤ systemctl enable ${SERVICE_NAME}"
 systemctl enable "${SERVICE_NAME}"
+
+echo "➤ systemctl start ${SERVICE_NAME}"
 systemctl start "${SERVICE_NAME}"
 
 echo ""
-echo "✅ Готово! Сервіс '${SERVICE_NAME}' запущено."
+echo "✅ Сервіс '${SERVICE_NAME}' запущено і додано до автозапуску."
 echo ""
 echo "📋 Корисні команди:"
-echo "  systemctl status ${SERVICE_NAME}       # статус"
-echo "  journalctl -u ${SERVICE_NAME} -f        # логи в реальному часі"
-echo "  systemctl restart ${SERVICE_NAME}       # перезапуск"
-echo "  systemctl stop ${SERVICE_NAME}          # зупинка"
+echo "   systemctl status ${SERVICE_NAME}"
+echo "   journalctl -u ${SERVICE_NAME} -f"
+echo "   systemctl restart ${SERVICE_NAME}"
+echo "   systemctl stop ${SERVICE_NAME}"
