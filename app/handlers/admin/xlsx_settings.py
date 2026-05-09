@@ -82,9 +82,8 @@ async def receive_xlsx_file(
     status = await message.answer("⏳ Зберігаю файл\.\.\.", parse_mode="MarkdownV2")
     try:
         file = await bot.get_file(doc.file_id)
-        file_bytes = await bot.download_file(file.file_path)
         save_path = _XLSX_UPLOAD_DIR / (doc.file_name or "schedule.xlsx")
-        save_path.write_bytes(file_bytes.read())
+        await bot.download(file, destination=str(save_path))
 
         repo = SettingRepository(session)
         await repo.set_xlsx_path(str(save_path))
@@ -118,8 +117,8 @@ async def cb_xlsx_set_range(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(XlsxSettingsStates.waiting_cell_range)
     await callback.message.answer(
-        "📌 Введіть діапазон комірок, напр. *A1:Z50*\."
-        " Цей діапазон буде зроблено картинкою при запиті ""графік\."",
+        r"📌 Введіть діапазон комірок, напр. *A1:Z50*\."
+        r" Цей діапазон буде зроблено картинкою при запиті ""графік""\.",
         parse_mode="MarkdownV2",
     )
 

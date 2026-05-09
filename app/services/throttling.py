@@ -1,15 +1,11 @@
-"""Throttling middleware для команди Графік.
+"""Throttling service для команди Графік.
 Обмеження: не більше 1 запиту за 5 секунд на user.
 """
 
-from typing import Any, Awaitable, Callable
-
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
 from redis.asyncio import Redis
 
 
-class ThrottlingMiddleware(BaseMiddleware):
+class ThrottlingService:
     @staticmethod
     async def check_action(
         redis: Redis,

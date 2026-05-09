@@ -52,6 +52,10 @@ async def on_startup(bot: Bot, session_factory) -> None:
 async def on_shutdown(bot: Bot) -> None:
     logger.info("Бот зупиняється...")
     await bot.session.close()
+    
+    engine = get_engine()
+    await engine.dispose()
+    logger.info("Підключення до бази даних закрито")
 
 
 async def main() -> None:

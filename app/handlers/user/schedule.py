@@ -10,7 +10,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.keyboards.user import kb_schedule_inline, kb_main_menu
-from app.middlewares.throttling import ThrottlingMiddleware
+from app.services.throttling import ThrottlingService
 from app.repositories.user import UserRepository
 from app.services.schedule import ScheduleService
 from app.states.schedule import ScheduleStates
@@ -29,7 +29,7 @@ async def cb_my_schedule(
     await callback.answer()
     user_id = callback.from_user.id
 
-    if not await ThrottlingMiddleware.check_action(redis, user_id, "schedule", cooldown=5):
+    if not await ThrottlingService.check_action(redis, user_id, "schedule", cooldown=5):
         await callback.answer("⏳ Зачекайте 5 секунд", show_alert=True)
         return
 
@@ -87,7 +87,7 @@ async def receive_surname(
         )
         return
 
-    if not await ThrottlingMiddleware.check_action(
+    if not await ThrottlingService.check_action(
         redis, message.from_user.id, "schedule", cooldown=5
     ):
         await message.answer("⏳ Зачекайте 5 секунд перед наступним запитом\.", parse_mode="MarkdownV2")
