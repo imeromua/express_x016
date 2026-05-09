@@ -1,19 +1,22 @@
 """Створення PNG з діапазону комірок Excel.
 
-Konfig зберігається в БД і завантажується в пам'ять при старті бота.
-Адмін може оновити налаштування без перезапуску через адмін-панель.
+Піплайн: xlsx → LibreOffice headless → PDF → pdf2image → PNG (crop по діапазону)
+Зберігає оригінальні кольори, шрифти, межі та стилі файлу.
 """
 
 import asyncio
+import subprocess
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-import openpyxl
-from PIL import Image, ImageDraw, ImageFont
 from loguru import logger
 
 _config: dict = {"xlsx_path": None, "sheet": None, "cell_range": None}
+
+# Шлях до libreoffice / soffice
+_LO_BIN: str = shutil.which("libreoffice") or shutil.which("soffice") or "libreoffice"
 
 
 def set_xlsx_config(
@@ -21,7 +24,7 @@ def set_xlsx_config(
     sheet: Optional[str] = None,
     cell_range: Optional[str] = None,
 ) -> None:
-    """Оновлює in-memory конфіг. Викликається при старті і після змін адміном."""
+    """in-memory конфіг. Викликається при старті та після змін адміном."""
     _config["xlsx_path"] = xlsx_path
     _config["sheet"] = sheet
     _config["cell_range"] = cell_range
@@ -33,16 +36,100 @@ def set_xlsx_config(
 
 async def make_schedule_screenshot() -> Optional[str]:
     """
-    Async-обгортка над синхронним рендерингом.
-    Виконує рендеринг у ThreadPoolExecutor щоб не блокувати event loop.
+    Async-обгортка. Виконує рендеринг у ThreadPoolExecutor.
     Повертає шлях до PNG або None.
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _render_sync)
 
 
+def _col_letter_to_index(col: str) -> int:
+    """'A'->1, 'B'->2, 'AK'->37"""
+    col = col.upper()
+    result = 0
+    for ch in col:
+        result = result * 26 + (ord(ch) - ord('A') + 1)
+    return result
+
+
+def _parse_range(cell_range: str):
+    """
+    'B4:AK14' -> (col_start=2, row_start=4, col_end=37, row_end=14)
+    """
+    import re
+    m = re.match(r'^([A-Z]+)(\d+):([A-Z]+)(\d+)$', cell_range.upper())
+    if not m:
+        return None
+    return (
+        _col_letter_to_index(m.group(1)), int(m.group(2)),
+        _col_letter_to_index(m.group(3)), int(m.group(4)),
+    )
+
+
+def _set_print_area_and_convert(xlsx_path: Path, sheet_name: Optional[str],
+                                 cell_range: Optional[str], tmp_dir: Path) -> Optional[Path]:
+    """
+    1. Копіюємо xlsx в temp,
+    2. встановлюємо PrintArea = cell_range (openpyxl),
+    3. запускаємо LibreOffice headless -> PDF,
+    4. повертаємо Path до PDF.
+    """
+    import shutil as _shutil
+    import openpyxl
+
+    # Копіюємо файл щоб не псувати оригінал
+    tmp_xlsx = tmp_dir / xlsx_path.name
+    _shutil.copy2(xlsx_path, tmp_xlsx)
+
+    # Встановлюємо область друку = cell_range (без цього LO рендерить весь аркуш)
+    if cell_range:
+        try:
+            wb = openpyxl.load_workbook(tmp_xlsx)
+            if sheet_name and sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+            else:
+                ws = wb.active
+            ws.print_area = cell_range
+            # Масштабування: підгоняємо друк до 1 сторінки
+            ws.page_setup.fitToPage = True
+            ws.page_setup.fitToHeight = 1
+            ws.page_setup.fitToWidth = 1
+            ws.page_setup.orientation = "landscape"
+            ws.sheet_properties.pageSetUpPr.fitToPage = True
+            wb.save(tmp_xlsx)
+            logger.debug(f"[xlsx_screenshot] print_area set: {cell_range}")
+        except Exception as e:
+            logger.warning(f"[xlsx_screenshot] could not set print_area: {e}")
+
+    # LibreOffice headless: xlsx -> PDF
+    result = subprocess.run(
+        [
+            _LO_BIN, "--headless", "--norestore", "--nofirststartwizard",
+            "--convert-to", "pdf",
+            "--outdir", str(tmp_dir),
+            str(tmp_xlsx),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        logger.error(f"[xlsx_screenshot] LibreOffice error: {result.stderr}")
+        return None
+
+    pdf_path = tmp_dir / (tmp_xlsx.stem + ".pdf")
+    if not pdf_path.exists():
+        logger.error(f"[xlsx_screenshot] PDF not found: {pdf_path}")
+        return None
+
+    logger.debug(f"[xlsx_screenshot] PDF ready: {pdf_path}")
+    return pdf_path
+
+
 def _render_sync() -> Optional[str]:
-    """Синхронний рендеринг таблиці Excel → PNG."""
+    """xlsx → PDF (LibreOffice) → PNG (pdf2image) → crop по діапазону."""
+    from pdf2image import convert_from_path
+
     xlsx_path = _config.get("xlsx_path")
     sheet_name = _config.get("sheet")
     cell_range = _config.get("cell_range")
@@ -56,97 +143,32 @@ def _render_sync() -> Optional[str]:
         logger.error(f"[xlsx_screenshot] file not found: {xlsx_file}")
         return None
 
-    try:
-        wb = openpyxl.load_workbook(xlsx_file, data_only=True)
-        if sheet_name and sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-        else:
-            ws = wb.active
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
 
-        if cell_range:
-            try:
-                raw_cells = list(ws[cell_range])
-            except Exception:
-                raw_cells = list(ws.iter_rows())
-        else:
-            raw_cells = list(ws.iter_rows())
-
-        if not raw_cells:
-            logger.warning("[xlsx_screenshot] empty cell range")
+        # Конвертуємо xlsx → PDF
+        pdf_path = _set_print_area_and_convert(xlsx_file, sheet_name, cell_range, tmp_dir)
+        if not pdf_path:
             return None
 
-        data = [[str(c.value if c.value is not None else "") for c in row]
-                for row in raw_cells]
-
-        # автоширина колонки за найдовшим значенням
+        # PDF → PIL Image (перша сторінка, 200 dpi)
         try:
-            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-            font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            font = ImageFont.truetype(font_path, 13)
-            font_bold = ImageFont.truetype(font_bold_path, 13)
-        except Exception:
-            font = ImageFont.load_default()
-            font_bold = font
+            pages = convert_from_path(str(pdf_path), dpi=200, first_page=1, last_page=1)
+        except Exception as e:
+            logger.error(f"[xlsx_screenshot] pdf2image error: {e}")
+            return None
 
-        # вимірюємо ширини колонок
-        tmp_img = Image.new("RGB", (1, 1))
-        tmp_draw = ImageDraw.Draw(tmp_img)
-        col_widths = []
-        num_cols = max(len(r) for r in data) if data else 1
-        for ci in range(num_cols):
-            max_w = 60
-            for row in data:
-                if ci < len(row):
-                    val = row[ci][:30]
-                    try:
-                        bbox = tmp_draw.textbbox((0, 0), val, font=font)
-                        w = bbox[2] - bbox[0] + 16
-                    except Exception:
-                        w = len(val) * 8 + 16
-                    max_w = max(max_w, w)
-            col_widths.append(min(max_w, 200))
+        if not pages:
+            logger.error("[xlsx_screenshot] pdf2image: no pages")
+            return None
 
-        CELL_H = 28
-        PAD = 8
-        img_w = sum(col_widths) + PAD * 2
-        img_h = len(data) * CELL_H + PAD * 2
+        img = pages[0]
+        logger.info(f"[xlsx_screenshot] rendered {img.width}x{img.height}px from PDF")
 
-        img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        for ri, row in enumerate(data):
-            y = PAD + ri * CELL_H
-            x = PAD
-            for ci, val in enumerate(row):
-                w = col_widths[ci] if ci < len(col_widths) else 80
-                fill = (220, 230, 255) if ri == 0 else (
-                    (245, 245, 245) if ri % 2 == 0 else (255, 255, 255)
-                )
-                draw.rectangle(
-                    [x, y, x + w - 1, y + CELL_H - 1],
-                    fill=fill,
-                    outline=(180, 180, 200),
-                )
-                f = font_bold if ri == 0 else font
-                draw.text(
-                    (x + 4, y + 6),
-                    val[:28],
-                    fill=(20, 20, 60),
-                    font=f,
-                )
-                x += w
-
-        temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        out_path = Path(temp_file.name)
-        temp_file.close()
-
+        # Зберігаємо PNG
+        out = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        out_path = Path(out.name)
+        out.close()
         img.save(out_path, "PNG", optimize=True)
-        logger.info(f"[xlsx_screenshot] rendered {img_w}x{img_h} px -> {out_path}")
+        logger.info(f"[xlsx_screenshot] saved -> {out_path}")
         return str(out_path)
-
-    except ImportError as e:
-        logger.error(f"[xlsx_screenshot] missing library: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"[xlsx_screenshot] render error: {e}")
-        return None
