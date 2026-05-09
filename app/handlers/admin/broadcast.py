@@ -27,18 +27,32 @@ router = Router(name="admin:broadcast")
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
+# Назви всіх reply-кнопок меню — вони не повинні стати контентом розсилки
+_MENU_BUTTONS = {
+    "📢 Розсилка",
+    "📂 Імпорт графіка",
+    "🚫 Стоп-слова",
+    "📊 Статистика",
+    "📅 Графік працівника",
+    "⚙️ Налаштування Excel",
+    "👥 Користувачі",
+}
+
 
 @router.message(F.text == "📢 Розсилка")
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
-    """Reply-кнопка — коректно приймає state."""
     await state.set_state(AdminStates.waiting_broadcast_text)
     await message.answer(
-        r"📢 Надішліть повідомлення або медіа для розсилки\.",
+        r"📢 Надішліть повідомлення або медіа для розсилки\."
+        r"Для скасування натисніть /cancel\.",
         parse_mode="MarkdownV2",
     )
 
 
-@router.message(StateFilter(AdminStates.waiting_broadcast_text))
+@router.message(
+    StateFilter(AdminStates.waiting_broadcast_text),
+    ~F.text.in_(_MENU_BUTTONS),
+)
 async def receive_broadcast_content(message: Message, state: FSMContext) -> None:
     await state.update_data(
         src_chat_id=message.chat.id,
@@ -51,6 +65,29 @@ async def receive_broadcast_content(message: Message, state: FSMContext) -> None
     await message.answer(
         "Відправити цю розсилку?",
         reply_markup=kb_confirm_broadcast(),
+    )
+
+
+@router.message(
+    StateFilter(AdminStates.waiting_broadcast_text),
+    F.text.in_(_MENU_BUTTONS),
+)
+async def broadcast_ignore_menu_button(message: Message) -> None:
+    """Ігноруємо натискання кнопки меню під час очікування тексту."""
+    await message.answer(
+        r"⚠️ Надішліть текст, фото, відео або інші медіа для розсилки\."
+        r" Для виходу з режиму натисніть /cancel\.",
+        parse_mode="MarkdownV2",
+    )
+
+
+@router.message(StateFilter(AdminStates.waiting_broadcast_text), F.text == "/cancel")
+@router.message(StateFilter(AdminStates.waiting_broadcast_confirm), F.text == "/cancel")
+async def broadcast_cancel_command(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        r"❌ Розсилку скасовано\.",
+        parse_mode="MarkdownV2",
     )
 
 
