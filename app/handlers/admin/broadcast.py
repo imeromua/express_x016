@@ -1,17 +1,17 @@
 """Broadcast — розсилка всім активним користувачам.
 
 Флоу:
-1. Адмін натискає кнопку 📢 Розсилка (reply) або inline
+1. Адмін натискає кнопку 📢 Розсилка
 2. FSM → waiting_broadcast_text
-3. Надсилає контент → preview → кнопки підтвердити/скасувати
+3. Надсилає контент → preview → підтвердити/скасувати
 4. FSM → waiting_broadcast_confirm
-5. Підтверджує → batch-розсилка з прогресом
+5. Підтверджує → batch-розсилка
 """
 
 import asyncio
 
 from aiogram import Router, F, Bot
-from aiogram.filters import StateFilter
+from aiogram.filters import StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from loguru import logger
@@ -27,8 +27,9 @@ router = Router(name="admin:broadcast")
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
-# Назви всіх reply-кнопок меню — вони не повинні стати контентом розсилки
-_MENU_BUTTONS = {
+# Тексти які не повинні стати контентом розсилки
+_EXCLUDED_TEXTS = {
+    "/cancel",
     "📢 Розсилка",
     "📂 Імпорт графіка",
     "🚫 Стоп-слова",
@@ -43,15 +44,42 @@ _MENU_BUTTONS = {
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminStates.waiting_broadcast_text)
     await message.answer(
-        r"📢 Надішліть повідомлення або медіа для розсилки\."
-        r"Для скасування натисніть /cancel\.",
+        "📢 Надішліть повідомлення або медіа для розсилки\."
+        " Для скасування натисніть \/cancel\.",
         parse_mode="MarkdownV2",
     )
 
 
+# 1️⃣ Спочатку іде /cancel — реєструємо першим, щоб бути вище по пріоритету
+@router.message(
+    StateFilter(AdminStates.waiting_broadcast_text, AdminStates.waiting_broadcast_confirm),
+    Command("cancel"),
+)
+async def broadcast_cancel_command(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        r"❌ Розсилку скасовано\.",
+        parse_mode="MarkdownV2",
+    )
+
+
+# 2️⃣ Назви кнопок меню — попереджаємо
 @router.message(
     StateFilter(AdminStates.waiting_broadcast_text),
-    ~F.text.in_(_MENU_BUTTONS),
+    F.text.in_(_EXCLUDED_TEXTS),
+)
+async def broadcast_ignore_excluded(message: Message) -> None:
+    await message.answer(
+        r"⚠️ Надішліть текст, фото, відео або інші медіа для розсилки\."
+        r" Для виходу натисніть \/cancel\.",
+        parse_mode="MarkdownV2",
+    )
+
+
+# 3️⃣ Основний хендлер — будь-який інший контент
+@router.message(
+    StateFilter(AdminStates.waiting_broadcast_text),
+    ~F.text.in_(_EXCLUDED_TEXTS),
 )
 async def receive_broadcast_content(message: Message, state: FSMContext) -> None:
     await state.update_data(
@@ -68,28 +96,7 @@ async def receive_broadcast_content(message: Message, state: FSMContext) -> None
     )
 
 
-@router.message(
-    StateFilter(AdminStates.waiting_broadcast_text),
-    F.text.in_(_MENU_BUTTONS),
-)
-async def broadcast_ignore_menu_button(message: Message) -> None:
-    """Ігноруємо натискання кнопки меню під час очікування тексту."""
-    await message.answer(
-        r"⚠️ Надішліть текст, фото, відео або інші медіа для розсилки\."
-        r" Для виходу з режиму натисніть /cancel\.",
-        parse_mode="MarkdownV2",
-    )
-
-
-@router.message(StateFilter(AdminStates.waiting_broadcast_text), F.text == "/cancel")
-@router.message(StateFilter(AdminStates.waiting_broadcast_confirm), F.text == "/cancel")
-async def broadcast_cancel_command(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        r"❌ Розсилку скасовано\.",
-        parse_mode="MarkdownV2",
-    )
-
+# ─── Inline callbacks ──────────────────────────────────────────────────
 
 @router.callback_query(
     F.data == "broadcast:confirm",
@@ -111,7 +118,7 @@ async def cb_broadcast_confirm(
 
     if not src_chat_id or not src_message_id:
         await callback.message.answer(
-            r"❌ Дані розсилки втрачено\. Спробуйте ще раз\.",
+            r"❌ Дані розсилки втраченп\. Спробуйте ще раз\.",
             parse_mode="MarkdownV2",
         )
         return
