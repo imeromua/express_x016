@@ -1,6 +1,6 @@
-"""Пошук графіка працівника з адмін-панелі.
-Використовує той самий ScheduleStates.waiting_surname що і group triggers.
-"""
+"""Пошук графіка працівника з адмін-панелі."""
+
+from datetime import date
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
@@ -29,20 +29,33 @@ async def receive_admin_surname(
     await state.clear()
 
     if not surname:
-        await message.answer("❌ Порожне прізвище\.", parse_mode="MarkdownV2")
+        await message.answer(r"\u274c Порожне прізвище\.", parse_mode="MarkdownV2")
         return
 
     svc = ScheduleService(session)
-    pib = await svc.resolve_pib(surname)
+    records = await svc.get_schedule_for_surname(surname, date.today())
 
-    if not pib:
-        await message.answer(
-            f"❌ Працівника *{esc(surname)}* не знайдено\.",
-            reply_markup=kb_back_to_admin(),
-            parse_mode="MarkdownV2",
-        )
+    if not records:
+        # Перевіряємо чи існує такий працівник взагалі
+        from app.repositories.schedule import ScheduleRepository
+        repo = ScheduleRepository(session)
+        pib = await repo.find_pib_exact(surname)
+        if not pib:
+            await message.answer(
+                f"❌ Працівника *{esc(surname)}* не знайдено\.",
+                reply_markup=kb_back_to_admin(),
+                parse_mode="MarkdownV2",
+            )
+        else:
+            # Працівник є, але найближчіх змін немає (графік закінчився)
+            await message.answer(
+                f"⚠️ Графік для *{esc(pib)}* не містить змін з сьогодні\.",
+                reply_markup=kb_back_to_admin(),
+                parse_mode="MarkdownV2",
+            )
         return
 
-    records = await svc.get_upcoming_for_pib(pib)
+    # Визначаємо повне ПІБ з першого запису
+    pib = records[0].pib
     text = format_schedule(records, pib)
     await message.answer(text, reply_markup=kb_back_to_admin(), parse_mode="MarkdownV2")
