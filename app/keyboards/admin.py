@@ -19,6 +19,19 @@ def kb_admin_main_menu() -> ReplyKeyboardMarkup:
     )
 
 
+def kb_stats_menu() -> InlineKeyboardMarkup:
+    """Pідменю статистики."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Загальна", callback_data="stats:general"),
+            InlineKeyboardButton(text="👤 По працівнику", callback_data="stats:by_employee"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back"),
+        ],
+    ])
+
+
 def kb_admin_panel_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -82,7 +95,6 @@ def kb_back_to_xlsx() -> InlineKeyboardMarkup:
 
 
 def kb_users_list(users: list, page: int = 0, page_size: int = 10) -> InlineKeyboardMarkup:
-    """Пагінований список користувачів."""
     start = page * page_size
     chunk = users[start:start + page_size]
     total_pages = (len(users) + page_size - 1) // page_size
@@ -113,16 +125,13 @@ def kb_users_list(users: list, page: int = 0, page_size: int = 10) -> InlineKeyb
 
 
 def kb_user_actions(user_id: int, is_active: bool, role: str) -> InlineKeyboardMarkup:
-    """Дії з конкретним користувачем."""
     toggle_text = "🚫 Деактивувати" if is_active else "✅ Активувати"
     toggle_cb = f"user:deactivate:{user_id}" if is_active else f"user:activate:{user_id}"
-
     role_btn = (
         InlineKeyboardButton(text="👑 Зробити адміном", callback_data=f"user:set_admin:{user_id}")
         if role != "admin"
         else InlineKeyboardButton(text="👤 Зняти адміна", callback_data=f"user:set_staff:{user_id}")
     )
-
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=toggle_text, callback_data=toggle_cb)],
         [role_btn],

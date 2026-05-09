@@ -11,8 +11,9 @@ from app.handlers.admin import (
     import_schedule, xlsx_settings, schedule_search, xlsx_preview,
 )
 from app.handlers.admin import users as users_handler
-from app.handlers.admin.statistics import get_stats_text
-from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin
+from app.handlers.admin import statistics as statistics_handler
+from app.handlers.admin.statistics import get_general_stats_text
+from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin, kb_stats_menu
 from app.repositories.user import UserRepository
 from app.states.admin import AdminStates
 from app.states.schedule import ScheduleStates
@@ -33,7 +34,7 @@ async def admin_start(message: Message) -> None:
     )
 
 
-# ─── Reply-кнопки (тільки в default_state) ────────────────────────────────────────
+# ─── Reply-кнопки (default_state) ──────────────────────────────────────────────
 
 @router.message(F.text == "📢 Розсилка", StateFilter(default_state))
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
@@ -61,8 +62,12 @@ async def btn_forbidden_admin(message: Message, session: AsyncSession) -> None:
 
 @router.message(F.text == "📊 Статистика", StateFilter(default_state))
 async def btn_stats(message: Message, session: AsyncSession) -> None:
-    text = await get_stats_text(session)
-    await message.answer(text, parse_mode="MarkdownV2")
+    text = await get_general_stats_text(session)
+    await message.answer(
+        text,
+        reply_markup=kb_stats_menu(),
+        parse_mode="MarkdownV2",
+    )
 
 
 @router.message(F.text == "📅 Графік працівника", StateFilter(default_state))
@@ -83,7 +88,6 @@ async def btn_users(message: Message, session: AsyncSession) -> None:
     users = await repo.get_all()
     total = len(users)
     active = sum(1 for u in users if u.is_active)
-
     from app.keyboards.admin import kb_users_list
     if not users:
         await message.answer(
@@ -91,10 +95,8 @@ async def btn_users(message: Message, session: AsyncSession) -> None:
             parse_mode="MarkdownV2",
         )
         return
-
     await message.answer(
-        f"👥 *Користувачі*\n"
-        f"Всього: *{total}* \| Активних: *{active}*",
+        f"👥 *Користувачі*\nВсього: *{total}* \| Активних: *{active}*",
         reply_markup=kb_users_list(users, page=0),
         parse_mode="MarkdownV2",
     )
@@ -111,8 +113,7 @@ async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     await callback.message.answer(
-        "🔧 *Панель адміністратора*\n"
-        "Натисніть кнопку для дії ⬇️",
+        "🔧 *Панель адміністратора*\nНатисніть кнопку для дії ⬇️",
         reply_markup=kb_admin_main_menu(),
         parse_mode="MarkdownV2",
     )
@@ -121,10 +122,10 @@ async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "admin:stats")
 async def cb_admin_stats(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
-    text = await get_stats_text(session)
+    text = await get_general_stats_text(session)
     await callback.message.edit_text(
         text,
-        reply_markup=kb_back_to_admin(),
+        reply_markup=kb_stats_menu(),
         parse_mode="MarkdownV2",
     )
 
@@ -168,3 +169,4 @@ router.include_router(xlsx_settings.router)
 router.include_router(xlsx_preview.router)
 router.include_router(schedule_search.router)
 router.include_router(users_handler.router)
+router.include_router(statistics_handler.router)
