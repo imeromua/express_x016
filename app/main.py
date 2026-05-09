@@ -52,7 +52,7 @@ async def on_startup(bot: Bot, session_factory) -> None:
 async def on_shutdown(bot: Bot) -> None:
     logger.info("Бот зупиняється...")
     await bot.session.close()
-    
+
     engine = get_engine()
     await engine.dispose()
     logger.info("Підключення до бази даних закрито")
@@ -83,8 +83,15 @@ async def main() -> None:
     dp.include_router(user_router)
     dp.include_router(group_router)
 
-    dp.startup.register(lambda: on_startup(bot, db_middleware.session_factory))
-    dp.shutdown.register(lambda: on_shutdown(bot))
+    # Виправлено: передаємо coroutine-функції через обгортки з аргументами
+    async def _on_startup() -> None:
+        await on_startup(bot, db_middleware.session_factory)
+
+    async def _on_shutdown() -> None:
+        await on_shutdown(bot)
+
+    dp.startup.register(_on_startup)
+    dp.shutdown.register(_on_shutdown)
 
     logger.info("Поллінг запущено")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

@@ -43,8 +43,8 @@ class ForbiddenWordsMiddleware(BaseMiddleware):
                     await event.delete()
                     await event.bot.send_message(
                         event.from_user.id,
-                        "⚠️ Твоє повідомлення видалено: містило заборонене слово\."
-                        " Будь ласка, дотримуйсь правил спільноти\.",
+                        r"⚠️ Твоє повідомлення видалено: містило заборонене слово\."
+                        r" Будь ласка, дотримуйсь правил спільноти\.",
                         parse_mode="MarkdownV2",
                     )
                 except Exception as e:
