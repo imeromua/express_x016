@@ -3,13 +3,13 @@
 Тригери:
   "графік"              → скріншот Excel-файлу (reply в групі)
   "графік <прізвище>" → текстовий графік конкретної людини
-  "розклад" / "зміна"     → аліаси "графік"
   "адмін" / "допоможіть"  → пересилає адмінам у приват
 
 Throttling: один запит графіка на 30 секунд на чат (не на юзера).
 """
 
 import re
+from datetime import date
 from pathlib import Path
 
 from aiogram import Router, F, Bot
@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.repositories.schedule import ScheduleRepository
 from app.services.schedule import ScheduleService
 from app.utils.schedule_formatter import format_schedule
 from app.utils.text import esc
@@ -36,7 +37,6 @@ _ADMIN_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 
-# Redis-ключ throttle: 1 скріншот на chat за 30 секунд
 _THROTTLE_TTL = 30
 _THROTTLE_KEY = "trigger:schedule:{chat_id}"
 
@@ -51,17 +51,16 @@ async def handle_group_text(
     session: AsyncSession,
     redis: Redis,
 ) -> None:
-    text = message.text or ""
-    lower = text.lower().strip()
+    text = (message.text or "").strip()
+    lower = text.lower()
 
-    # ─── тригер "адмін" ───────────────────────────────────────
     if _ADMIN_RE.search(lower):
         await _handle_admin_trigger(message, bot)
         return
 
-    # ─── тригер "графік" ──────────────────────────────────────
     if _SCHEDULE_RE.search(lower):
-        surname_part = _SCHEDULE_RE.sub("", lower).strip()
+        # Видаляємо тригерне слово, залишаємо решту (прізвище)
+        surname_part = _SCHEDULE_RE.sub("", text).strip()
         if not surname_part:
             await _send_excel_screenshot(message, redis)
         else:
@@ -69,7 +68,6 @@ async def handle_group_text(
 
 
 async def _send_excel_screenshot(message: Message, redis: Redis) -> None:
-    """Throttle: один скріншот на 30с на весь чат."""
     throttle_key = _THROTTLE_KEY.format(chat_id=message.chat.id)
     if await redis.exists(throttle_key):
         ttl = await redis.ttl(throttle_key)
@@ -83,8 +81,7 @@ async def _send_excel_screenshot(message: Message, redis: Redis) -> None:
         img_path = await make_schedule_screenshot()
         if not img_path or not Path(img_path).exists():
             await message.reply(
-                "⚠️ Графік наразі недоступний\. "
-                "Зверніться до адміна\.",
+                r"⚠️ Графік наразі недоступний\. Зверніться до адміна\.",
                 parse_mode="MarkdownV2",
             )
             return
@@ -93,13 +90,12 @@ async def _send_excel_screenshot(message: Message, redis: Redis) -> None:
             photo=FSInputFile(img_path),
             caption="📅 Актуальний графік",
         )
-        # встановлюємо throttle
         await redis.setex(throttle_key, _THROTTLE_TTL, "1")
 
     except Exception as e:
         logger.error(f"[trigger:schedule] screenshot error: {e}")
         await message.reply(
-            "⚠️ Не вдалося сформувати графік\. Спробуйте пізніше\.",
+            r"⚠️ Не вдалося сформувати графік\. Спробуйте пізніше\.",
             parse_mode="MarkdownV2",
         )
 
@@ -110,22 +106,23 @@ async def _send_personal_schedule(
     surname: str,
 ) -> None:
     """Reply з текстовим графіком конкретної людини."""
-    svc = ScheduleService(session)
-    pib = await svc.resolve_pib(surname)
+    # Спочатку знаходимо ПІБ за прізвищем
+    repo = ScheduleRepository(session)
+    pib = await repo.find_pib_exact(surname)
     if not pib:
         await message.reply(
-            f"❌ Працівника з прізвищем *{esc(surname)}* не знайдено\."
-            " Перевірте правопис прізвища\.",
+            f"❌ Працівника *{esc(surname)}* не знайдено\."
+            r" Перевірте правопис прізвища\.",
             parse_mode="MarkdownV2",
         )
         return
-    records = await svc.get_upcoming_for_pib(pib)
+
+    records = await repo.get_upcoming(pib, date.today())
     text = format_schedule(records, pib)
     await message.reply(text, parse_mode="MarkdownV2")
 
 
 async def _handle_admin_trigger(message: Message, bot: Bot) -> None:
-    """Пересилає повідомлення адмінам у приват."""
     settings = get_settings()
     user = message.from_user
     tag = f"#user:{user.id}"
@@ -150,11 +147,11 @@ async def _handle_admin_trigger(message: Message, bot: Bot) -> None:
 
     if forwarded:
         await message.reply(
-            "✅ Адміністратор отримав ваше повідомлення\. Очікуйте відповіді\.",
+            r"✅ Адміністратор отримав ваше повідомлення\. Очікуйте відповіді\.",
             parse_mode="MarkdownV2",
         )
     else:
         await message.reply(
-            "⚠️ Не вдалося надіслати запит адміну\. Спробуйте пізніше\.",
+            r"⚠️ Не вдалося надіслати запит адміну\. Спробуйте пізніше\.",
             parse_mode="MarkdownV2",
         )
