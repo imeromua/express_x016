@@ -7,13 +7,14 @@ from aiogram import Router, F
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
-from sqlalchemy import Integer, cast, case, func, select
+from sqlalchemy import Integer, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.filters.is_admin import IsAdminFilter
-from app.keyboards.admin import kb_stats_menu, kb_back_to_admin
+from app.keyboards.admin import kb_stats_menu, kb_pib_picker
 from app.models.schedule import Schedule
 from app.models.user import User
+from app.repositories.schedule import ScheduleRepository
 from app.states.admin import AdminStates
 from app.utils.text import esc
 
@@ -21,25 +22,21 @@ router = Router(name="admin:statistics")
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
+_STATS_PIB_PREFIX = "stats_pib"
+
 
 # ─── Загальна статистика ────────────────────────────────────────────────
 
 async def get_general_stats_text(session: AsyncSession) -> str:
     today = date.today()
-
-    total_users = (await session.execute(
-        select(func.count()).select_from(User)
-    )).scalar_one()
+    total_users = (await session.execute(select(func.count()).select_from(User))).scalar_one()
     active_users = (await session.execute(
         select(func.count()).select_from(User).where(User.is_active == True)  # noqa
     )).scalar_one()
     admin_users = (await session.execute(
         select(func.count()).select_from(User).where(User.role == "admin")
     )).scalar_one()
-
-    total_records = (await session.execute(
-        select(func.count()).select_from(Schedule)
-    )).scalar_one()
+    total_records = (await session.execute(select(func.count()).select_from(Schedule))).scalar_one()
     unique_employees = (await session.execute(
         select(func.count(func.distinct(Schedule.pib)))
     )).scalar_one()
@@ -61,7 +58,6 @@ async def get_general_stats_text(session: AsyncSession) -> str:
         if min_date and max_date else r"_немає даних_"
     )
     today_str = esc(today.strftime("%d.%m.%Y"))
-
     return (
         f"📊 *Статистика* — {today_str}\n\n"
         f"*👥 Користувачі*\n"
@@ -79,110 +75,94 @@ async def get_general_stats_text(session: AsyncSession) -> str:
     )
 
 
-# ─── Статистика по працівнику ─────────────────────────────────────────
-
-async def get_employee_stats(session: AsyncSession, pib: str) -> Optional[str]:
-    """SQL-агрегація по pib. Використовуємо case() замість func.cast."""
+async def get_employee_stats_by_pib(session: AsyncSession, pib: str) -> str:
     rows = (await session.execute(
         select(
             Schedule.pib,
             func.count().label("total"),
-            func.sum(
-                case((Schedule.is_working == True, 1), else_=0)  # noqa: E712
-            ).label("work_days"),
+            func.sum(case((Schedule.is_working == True, 1), else_=0)).label("work_days"),  # noqa
             func.coalesce(func.sum(Schedule.shift_hours), 0).label("total_hours"),
-            func.sum(
-                case((Schedule.status == "vacation", 1), else_=0)
-            ).label("vacation"),
-            func.sum(
-                case((Schedule.status == "sick", 1), else_=0)
-            ).label("sick"),
-            func.sum(
-                case((Schedule.status == "off", 1), else_=0)
-            ).label("off_days"),
+            func.sum(case((Schedule.status == "vacation", 1), else_=0)).label("vacation"),
+            func.sum(case((Schedule.status == "sick", 1), else_=0)).label("sick"),
+            func.sum(case((Schedule.status == "off", 1), else_=0)).label("off_days"),
         )
-        .where(Schedule.pib.ilike(f"%{pib}%"))
+        .where(Schedule.pib == pib)
         .group_by(Schedule.pib)
-        .order_by(Schedule.pib)
-    )).fetchall()
+    )).fetchone()
 
     if not rows:
-        return None
+        return f"❌ Даних для *{esc(pib)}* не знайдено\."
 
-    results = []
-    for row in rows:
-        results.append(
-            f"*👤 {esc(row.pib)}*\n"
-            f"• Записів у графіку: *{row.total}*\n"
-            f"• Робочих днів: *{row.work_days or 0}* 🟢\n"
-            f"• Вихідних днів: *{row.off_days or 0}* ⚪\n"
-            f"• Відпусток: *{row.vacation or 0}* 🏖\n"
-            f"• Лікарняних: *{row.sick or 0}* 🏥\n"
-            f"• Годин робочих: *{row.total_hours or 0}* ⏰\n"
-        )
-
-    return "\n".join(results)
+    return (
+        f"*👤 {esc(rows.pib)}*\n"
+        f"• Записів у графіку: *{rows.total}*\n"
+        f"• Робочих днів: *{rows.work_days or 0}* 🟢\n"
+        f"• Вихідних днів: *{rows.off_days or 0}* ⚪\n"
+        f"• Відпусток: *{rows.vacation or 0}* 🏖\n"
+        f"• Лікарняних: *{rows.sick or 0}* 🏥\n"
+        f"• Годин робочих: *{rows.total_hours or 0}* ⏰\n"
+    )
 
 
-# ─── Хендлери callback ───────────────────────────────────────────────
+# ─── Калбеки ──────────────────────────────────────────────────
 
 @router.callback_query(F.data == "stats:general")
 async def cb_stats_general(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     text = await get_general_stats_text(session)
-    await callback.message.edit_text(
-        text,
-        reply_markup=kb_stats_menu(),
-        parse_mode="MarkdownV2",
-    )
+    await callback.message.edit_text(text, reply_markup=kb_stats_menu(), parse_mode="MarkdownV2")
 
 
 @router.callback_query(F.data == "stats:by_employee")
-async def cb_stats_by_employee(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    await state.set_state(AdminStates.waiting_stats_employee)
-    await callback.message.edit_text(
-        "🔍 Введіть прізвище або частину ПІБ працівника\."
-        " Для виходу натисніть \/cancel\.",
-        reply_markup=None,
-        parse_mode="MarkdownV2",
-    )
-
-
-@router.message(
-    StateFilter(AdminStates.waiting_stats_employee),
-    F.text,
-    ~F.text.startswith("/"),
-)
-async def receive_stats_employee(
-    message: Message, state: FSMContext, session: AsyncSession
+async def cb_stats_by_employee(
+    callback: CallbackQuery, session: AsyncSession
 ) -> None:
-    await state.clear()
-    query = message.text.strip()
-    text = await get_employee_stats(session, query)
+    await callback.answer()
+    repo = ScheduleRepository(session)
+    pib_list = await repo.get_all_unique_pib()
 
-    if not text:
-        await message.answer(
-            f"❌ Працівників за запитом *{esc(query)}* не знайдено\.",
-            reply_markup=kb_stats_menu(),
-            parse_mode="MarkdownV2",
-        )
+    if not pib_list:
+        await callback.answer("⚠️ Графік порожній", show_alert=True)
         return
 
-    await message.answer(
-        f"📊 *Статистика по працівнику*\n\n{text}",
-        reply_markup=kb_stats_menu(),
-        parse_mode="MarkdownV2",
+    kb = kb_pib_picker(
+        pib_list=pib_list,
+        callback_prefix=_STATS_PIB_PREFIX,
+        page=0,
+        back_cb="stats:general",
+    )
+    await callback.message.edit_text(
+        "👤 Оберіть працівника:",
+        reply_markup=kb,
     )
 
 
-@router.message(
-    StateFilter(AdminStates.waiting_stats_employee),
-    F.text.startswith("/"),
-)
-async def cancel_stats_employee(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        r"❌ Скасовано\.",
+@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:page:(\d+)$"))
+async def cb_stats_pib_page(
+    callback: CallbackQuery, session: AsyncSession
+) -> None:
+    await callback.answer()
+    page = int(callback.data.split(":")[2])
+    repo = ScheduleRepository(session)
+    pib_list = await repo.get_all_unique_pib()
+    kb = kb_pib_picker(
+        pib_list=pib_list,
+        callback_prefix=_STATS_PIB_PREFIX,
+        page=page,
+        back_cb="stats:general",
+    )
+    await callback.message.edit_reply_markup(reply_markup=kb)
+
+
+@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:(?!page:).+$"))
+async def cb_stats_pib_select(
+    callback: CallbackQuery, session: AsyncSession
+) -> None:
+    await callback.answer()
+    pib = callback.data[len(_STATS_PIB_PREFIX) + 1:]
+    text = await get_employee_stats_by_pib(session, pib)
+    await callback.message.edit_text(
+        f"📊 *Статистика по працівнику*\n\n{text}",
+        reply_markup=kb_stats_menu(),
         parse_mode="MarkdownV2",
     )

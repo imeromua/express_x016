@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,10 +26,7 @@ class ScheduleRepository:
         return list(result.scalars().all())
 
     async def find_pib_exact(self, surname: str) -> Optional[str]:
-        """
-        Знаходить повне ПІБ за прізвищем (перший токен, case-insensitive).
-        Повертає None якщо не знайдено.
-        """
+        """Знаходить повне ПІБ за прізвищем."""
         result = await self._s.execute(
             select(Schedule.pib)
             .where(Schedule.pib.ilike(f"{surname}%"))
@@ -38,8 +35,14 @@ class ScheduleRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_all_unique_pib(self) -> List[str]:
+        """Всі унікальні ПІБ з графіку, відсортовані алфавітно."""
+        result = await self._s.execute(
+            select(func.distinct(Schedule.pib)).order_by(Schedule.pib)
+        )
+        return list(result.scalars().all())
+
     async def upsert_many(self, rows: list[dict]) -> int:
-        """Масовий UPSERT. Повертає кількість оброблених рядків."""
         if not rows:
             return 0
         stmt = (

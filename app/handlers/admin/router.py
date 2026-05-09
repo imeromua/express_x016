@@ -12,6 +12,7 @@ from app.handlers.admin import (
 )
 from app.handlers.admin import users as users_handler
 from app.handlers.admin import statistics as statistics_handler
+from app.handlers.admin import assign_pib as assign_pib_handler
 from app.handlers.admin.statistics import get_general_stats_text
 from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin, kb_stats_menu
 from app.repositories.user import UserRepository
@@ -33,8 +34,6 @@ async def admin_start(message: Message) -> None:
         parse_mode="MarkdownV2",
     )
 
-
-# ─── Reply-кнопки (default_state) ──────────────────────────────────────────────
 
 @router.message(F.text == "📢 Розсилка", StateFilter(default_state))
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
@@ -63,17 +62,15 @@ async def btn_forbidden_admin(message: Message, session: AsyncSession) -> None:
 @router.message(F.text == "📊 Статистика", StateFilter(default_state))
 async def btn_stats(message: Message, session: AsyncSession) -> None:
     text = await get_general_stats_text(session)
-    await message.answer(
-        text,
-        reply_markup=kb_stats_menu(),
-        parse_mode="MarkdownV2",
-    )
+    await message.answer(text, reply_markup=kb_stats_menu(), parse_mode="MarkdownV2")
 
 
 @router.message(F.text == "📅 Графік працівника", StateFilter(default_state))
-async def btn_worker_schedule(message: Message, state: FSMContext) -> None:
+async def btn_worker_schedule(message: Message, state: FSMContext, session: AsyncSession) -> None:
     await state.set_state(ScheduleStates.waiting_surname)
-    await message.answer("🔍 Введіть прізвище працівника:")
+    # Відразу шокаємо inline-список замість текстового вводу
+    from app.handlers.admin.schedule_search import _show_schedule_picker
+    await _show_schedule_picker(message, session, state)
 
 
 @router.message(F.text == "⚙️ Налаштування Excel", StateFilter(default_state))
@@ -90,10 +87,7 @@ async def btn_users(message: Message, session: AsyncSession) -> None:
     active = sum(1 for u in users if u.is_active)
     from app.keyboards.admin import kb_users_list
     if not users:
-        await message.answer(
-            "👥 *Користувачі*\n\nСписок порожній\.",
-            parse_mode="MarkdownV2",
-        )
+        await message.answer("👥 *Користувачі*\n\nСписок порожній\.", parse_mode="MarkdownV2")
         return
     await message.answer(
         f"👥 *Користувачі*\nВсього: *{total}* \| Активних: *{active}*",
@@ -101,8 +95,6 @@ async def btn_users(message: Message, session: AsyncSession) -> None:
         parse_mode="MarkdownV2",
     )
 
-
-# ─── Inline callbacks ──────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
@@ -123,11 +115,7 @@ async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_admin_stats(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     text = await get_general_stats_text(session)
-    await callback.message.edit_text(
-        text,
-        reply_markup=kb_stats_menu(),
-        parse_mode="MarkdownV2",
-    )
+    await callback.message.edit_text(text, reply_markup=kb_stats_menu(), parse_mode="MarkdownV2")
 
 
 @router.callback_query(F.data == "admin:broadcast")
@@ -159,8 +147,12 @@ async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> 
     await show_forbidden_list(callback.message, session)
 
 
-# ─── Інклюзія саб-роутерів ────────────────────────────────────────────
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
 
+
+router.include_router(assign_pib_handler.router)
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)
 router.include_router(forbidden_words.router)

@@ -59,19 +59,29 @@ class UserRepository:
 
     async def set_active(self, user_id: int, active: bool) -> None:
         await self._s.execute(
-            update(User)
-            .where(User.user_id == user_id)
-            .values(is_active=active)
+            update(User).where(User.user_id == user_id).values(is_active=active)
         )
         await self._s.commit()
 
     async def set_role(self, user_id: int, role: str) -> None:
         await self._s.execute(
-            update(User)
-            .where(User.user_id == user_id)
-            .values(role=role)
+            update(User).where(User.user_id == user_id).values(role=role)
         )
         await self._s.commit()
+
+    async def set_pib(self, user_id: int, pib: str) -> None:
+        """\u041fрисвоюємо реальний ПІБ з графіку до телеграм-юзера."""
+        await self._s.execute(
+            update(User).where(User.user_id == user_id).values(pib=pib)
+        )
+        await self._s.commit()
+
+    async def get_by_pib(self, pib: str) -> Optional[User]:
+        """\u0428укає юзера за присвоєним ПІБ (для перевірки дублікатів)."""
+        result = await self._s.execute(
+            select(User).where(User.pib == pib)
+        )
+        return result.scalar_one_or_none()
 
     async def count_active(self) -> int:
         from sqlalchemy import func

@@ -5,6 +5,8 @@ from aiogram.types import (
     KeyboardButton,
 )
 
+_PIB_PAGE_SIZE = 8
+
 
 def kb_admin_main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -20,7 +22,6 @@ def kb_admin_main_menu() -> ReplyKeyboardMarkup:
 
 
 def kb_stats_menu() -> InlineKeyboardMarkup:
-    """Pідменю статистики."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Загальна", callback_data="stats:general"),
@@ -30,6 +31,43 @@ def kb_stats_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back"),
         ],
     ])
+
+
+def kb_pib_picker(
+    pib_list: list[str],
+    callback_prefix: str,
+    page: int = 0,
+    back_cb: str = "admin:back",
+) -> InlineKeyboardMarkup:
+    """Універсальний inline-вибір ПІБ з пагінацією.
+
+    callback_data кнопки: f"{callback_prefix}:{pib}"
+    callback_data пагінації: f"{callback_prefix}:page:{page}"
+    """
+    start = page * _PIB_PAGE_SIZE
+    chunk = pib_list[start: start + _PIB_PAGE_SIZE]
+    total_pages = max(1, (len(pib_list) + _PIB_PAGE_SIZE - 1) // _PIB_PAGE_SIZE)
+
+    buttons = [
+        [InlineKeyboardButton(text=pib, callback_data=f"{callback_prefix}:{pib}")]
+        for pib in chunk
+    ]
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{callback_prefix}:page:{page - 1}"))
+    nav.append(InlineKeyboardButton(
+        text=f"{page + 1}/{total_pages}",
+        callback_data="noop",
+    ))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{callback_prefix}:page:{page + 1}"))
+    buttons.append(nav)
+
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def kb_admin_panel_inline() -> InlineKeyboardMarkup:
@@ -103,9 +141,10 @@ def kb_users_list(users: list, page: int = 0, page_size: int = 10) -> InlineKeyb
     for u in chunk:
         label = u.pib or u.username or str(u.user_id)
         status = "✅" if u.is_active else "❌"
+        linked = "🔗" if u.pib else "⚠️"  # присвоєно / ні
         buttons.append([
             InlineKeyboardButton(
-                text=f"{status} {label}",
+                text=f"{status}{linked} {label}",
                 callback_data=f"user:view:{u.user_id}",
             )
         ])
@@ -124,7 +163,7 @@ def kb_users_list(users: list, page: int = 0, page_size: int = 10) -> InlineKeyb
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def kb_user_actions(user_id: int, is_active: bool, role: str) -> InlineKeyboardMarkup:
+def kb_user_actions(user_id: int, is_active: bool, role: str, has_pib: bool = False) -> InlineKeyboardMarkup:
     toggle_text = "🚫 Деактивувати" if is_active else "✅ Активувати"
     toggle_cb = f"user:deactivate:{user_id}" if is_active else f"user:activate:{user_id}"
     role_btn = (
@@ -132,8 +171,13 @@ def kb_user_actions(user_id: int, is_active: bool, role: str) -> InlineKeyboardM
         if role != "admin"
         else InlineKeyboardButton(text="👤 Зняти адміна", callback_data=f"user:set_staff:{user_id}")
     )
+    assign_btn = InlineKeyboardButton(
+        text="🔗 Присвоїти ПІБ" if not has_pib else "✏️ Змінити ПІБ",
+        callback_data=f"user:assign_pib:{user_id}",
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=toggle_text, callback_data=toggle_cb)],
         [role_btn],
+        [assign_btn],
         [InlineKeyboardButton(text="⬅️ Назад до списку", callback_data="admin:users")],
     ])
