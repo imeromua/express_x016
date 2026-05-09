@@ -10,7 +10,7 @@ from app.handlers.admin import (
     broadcast, reply_user, forbidden_words,
     import_schedule, xlsx_settings, schedule_search,
 )
-from app.keyboards.admin import kb_admin_main_menu, kb_admin_panel_inline, kb_back_to_admin
+from app.keyboards.admin import kb_admin_main_menu, kb_back_to_admin
 from app.repositories.user import UserRepository
 from app.states.admin import AdminStates
 from app.states.schedule import ScheduleStates
@@ -24,9 +24,28 @@ router.callback_query.filter(IsAdminFilter())
 @router.message(CommandStart())
 async def admin_start(message: Message) -> None:
     await message.answer(
-        "🔧 *Панель адміністратора*\n"
-        "Натисніть кнопку для дії ⬇️",
+        "\U0001f527 *\u041f\u0430\u043d\u0435\u043b\u044c \u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0430*\n"
+        "\u041d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c \u043a\u043d\u043e\u043f\u043a\u0443 \u0434\u043b\u044f \u0434\u0456\u0457 \u2b07\ufe0f",
         reply_markup=kb_admin_main_menu(),
+        parse_mode="MarkdownV2",
+    )
+
+
+# ─── Reply-кнопки (головне меню) ────────────────────────────────────────
+
+@router.message(F.text == "📢 Розсилка")
+async def btn_broadcast(message: Message, state: FSMContext) -> None:
+    await state.set_state(AdminStates.waiting_broadcast_text)
+    await message.answer(
+        r"📢 Надішліть повідомлення або медіа для розсилки\.",
+        parse_mode="MarkdownV2",
+    )
+
+
+@router.message(F.text == "📂 Імпорт графіка", StateFilter(default_state))
+async def btn_import_schedule(message: Message) -> None:
+    await message.answer(
+        r"🗂 Надішліть *\.xlsx* файл графіка\.",
         parse_mode="MarkdownV2",
     )
 
@@ -57,14 +76,14 @@ async def btn_worker_schedule(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "⚙️ Налаштування Excel", StateFilter(default_state))
 async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
     from app.repositories.setting import SettingRepository
+    from app.keyboards.admin import kb_xlsx_settings
     srep = SettingRepository(session)
     cfg = await srep.get_xlsx_config()
     path = cfg.get("xlsx_path") or "не задано"
     sheet = cfg.get("xlsx_sheet") or "перший аркуш"
     cell_range = cfg.get("xlsx_cell_range") or "весь аркуш"
-    from app.keyboards.admin import kb_xlsx_settings
     await message.answer(
-        rf"⚙️ *Налаштування графіка \(Excel\)*\n\n"
+        f"⚙️ *Налаштування графіка \\(Excel\\)*\n\n"
         f"📄 Файл: `{esc(path)}`\n"
         f"📄 Аркуш: `{esc(sheet)}`\n"
         f"📌 Діапазон: `{esc(cell_range)}`",
@@ -73,14 +92,20 @@ async def btn_xlsx_settings(message: Message, session: AsyncSession) -> None:
     )
 
 
-# --- Inline callbacks ---
+# ─── Inline callbacks ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:back")
 async def cb_admin_back(callback: CallbackQuery) -> None:
+    """Back — видаляємо inline-повідомлення і відновлюємо reply-меню."""
     await callback.answer()
-    await callback.message.edit_text(
-        "🔧 *Панель адміністратора*\nОберіть дію:",
-        reply_markup=kb_admin_panel_inline(),
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.message.answer(
+        "🔧 *Панель адміністратора*\n"
+        "Натисніть кнопку для дії ⬇️",
+        reply_markup=kb_admin_main_menu(),
         parse_mode="MarkdownV2",
     )
 
@@ -125,12 +150,8 @@ async def cb_admin_forbidden(callback: CallbackQuery, session: AsyncSession) -> 
     await show_forbidden_list(callback.message, session)
 
 
-@router.callback_query(F.data == "admin:xlsx_settings")
-async def cb_admin_xlsx_settings(callback: CallbackQuery, session: AsyncSession) -> None:
-    await callback.answer()
-    from app.handlers.admin.xlsx_settings import cb_xlsx_settings
-    await cb_xlsx_settings(callback, session)
-
+# ВАЖЛИВО: admin:xlsx_settings обробляється виключно в xlsx_settings.router
+# Тут не реєструємо, щоб уникнути дублювання.
 
 router.include_router(broadcast.router)
 router.include_router(reply_user.router)
