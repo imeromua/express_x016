@@ -19,6 +19,9 @@ router = Router(name="admin:statistics")
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
+# prefix без user_id, тому формати:
+#   пагінація: stats_pib:page:{page}
+#   вибір:     stats_pib:i:{pib_index}
 _STATS_PIB_PREFIX = "stats_pib"
 
 
@@ -130,13 +133,10 @@ async def cb_stats_by_employee(callback: CallbackQuery, session: AsyncSession) -
     await _safe_edit(callback, "👤 Оберіть працівника:", reply_markup=kb)
 
 
-@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:(\d+):page:(\d+)$"))
+# stats_pib:page:{page}  (без user_id на відміну від assign_pib)
+@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:page:(\d+)$"))
 async def cb_stats_pib_page(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
-    # stats_pib:{pib_index}:page:{page}  — але тут prefix без user_id,
-    # тому структура: stats_pib:page:{page}  (старий формат)
-    # Після рефакторингу prefix = "stats_pib", тому:
-    # callback = "stats_pib:page:{page}"
     page = int(callback.data.split(":")[2])
     repo = ScheduleRepository(session)
     pib_list = await repo.get_all_unique_pib()
@@ -148,14 +148,11 @@ async def cb_stats_pib_page(callback: CallbackQuery, session: AsyncSession) -> N
             raise
 
 
-@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:(\d+):i:(\d+)$"))
-async def cb_stats_pib_select(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
+# stats_pib:i:{pib_index}
+@router.callback_query(F.data.regexp(rf"^{_STATS_PIB_PREFIX}:i:(\d+)$"))
+async def cb_stats_pib_select(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
-    # stats_pib:{something}:i:{pib_index}
-    parts = callback.data.split(":")
-    pib_index = int(parts[3])
+    pib_index = int(callback.data.split(":")[2])
     repo = ScheduleRepository(session)
     pib_list = await repo.get_all_unique_pib()
     if pib_index >= len(pib_list):
