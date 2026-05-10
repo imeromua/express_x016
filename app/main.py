@@ -25,8 +25,17 @@ from app.middlewares.redis import RedisMiddleware
 from app.repositories.setting import SettingRepository
 from app.utils.xlsx_screenshot import set_xlsx_config
 
+# Усі типи оновлень, які потрібні боту (розширений список)
+ALLOWED_UPDATES = [
+    "message",           # повідомлення (приват + група)
+    "edited_message",    # редаговані повідомлення
+    "callback_query",    # inline-кнопки
+    "chat_member",       # вступ/вихід учасників групи
+    "my_chat_member",    # зміна статусу самого бота
+    "chat_join_request", # запити на вступ
+]
 
-# ───────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────
 PRINT_SEP = "─" * 60
 
 
@@ -121,7 +130,7 @@ async def on_startup(bot: Bot, session_factory, redis: Redis) -> None:
     await _load_xlsx_config_on_startup(session_factory)
 
     logger.info(PRINT_SEP)
-    logger.info("✅  Бот готовий, поллінг запущено")
+    logger.info(f"✅  Бот готовий, поллінг запущено | allowed: {', '.join(ALLOWED_UPDATES)}")
     logger.info(PRINT_SEP)
 
 
@@ -153,10 +162,9 @@ async def main() -> None:
     dp.update.middleware(db_middleware)
     dp.update.middleware(RedisMiddleware(redis))
     dp.message.middleware(ForbiddenWordsMiddleware())
-    # GroupTracker: реєструє кожного хто пише в групі
     dp.message.middleware(GroupTrackerMiddleware())
 
-    # Роутери: errors перший, admin до user (фільтр IsAdmin)
+    # Роутери
     dp.include_router(errors.router)
     dp.include_router(admin_router)
     dp.include_router(user_router)
@@ -171,14 +179,7 @@ async def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
-    # chat_member потрібен для відстеження нових учасників групи
-    await dp.start_polling(
-        bot,
-        allowed_updates=[
-            *dp.resolve_used_update_types(),
-            "chat_member",
-        ],
-    )
+    await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
 
 
 if __name__ == "__main__":
