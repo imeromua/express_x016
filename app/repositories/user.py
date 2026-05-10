@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import select, update
@@ -14,12 +15,23 @@ class UserRepository:
         self._s = session
 
     async def upsert(self, **kwargs) -> User:
+        """Insert або update юзера. Явно виставляє дефолти, щоб server/orm defaults
+        не падали при raw INSERT."""
+        # Дефолти для INSERT (не перезаписують якщо передано явно)
+        insert_values = {
+            "joined_at": datetime.now(tz=timezone.utc),
+            "role": "staff",
+            "is_active": True,
+            **kwargs,  # kwargs перекривають дефолти якщо вказані
+        }
+        # При конфлікті оновлюємо лише те, що передано в kwargs (напр. username)
+        update_values = {k: v for k, v in kwargs.items() if k != "user_id"}
         stmt = (
             insert(User)
-            .values(**kwargs)
+            .values(**insert_values)
             .on_conflict_do_update(
                 index_elements=[User.user_id],
-                set_={k: v for k, v in kwargs.items() if k != "user_id"},
+                set_=update_values,
             )
             .returning(User)
         )
@@ -70,14 +82,14 @@ class UserRepository:
         await self._s.commit()
 
     async def set_pib(self, user_id: int, pib: str) -> None:
-        """\u041fрисвоюємо реальний ПІБ з графіку до телеграм-юзера."""
+        """Присвоюємо реальний ПІБ з графіку до телеграм-юзера."""
         await self._s.execute(
             update(User).where(User.user_id == user_id).values(pib=pib)
         )
         await self._s.commit()
 
     async def get_by_pib(self, pib: str) -> Optional[User]:
-        """\u0428укає юзера за присвоєним ПІБ (для перевірки дублікатів)."""
+        """Шукає юзера за присвоєним ПІБ (для перевірки дублікатів)."""
         result = await self._s.execute(
             select(User).where(User.pib == pib)
         )
