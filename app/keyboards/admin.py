@@ -41,16 +41,19 @@ def kb_pib_picker(
 ) -> InlineKeyboardMarkup:
     """Універсальний inline-вибір ПІБ з пагінацією.
 
-    callback_data кнопки: f"{callback_prefix}:{pib}"
-    callback_data пагінації: f"{callback_prefix}:page:{page}"
+    Замість самого ПІБ у callback_data передається його ІНДЕКС у pib_list,
+    щоб не перевищити ліміт Telegram у 64 байти.
+
+    callback_data кнопки вибору: f"{callback_prefix}:i:{global_index}"
+    callback_data пагінації:     f"{callback_prefix}:page:{page}"
     """
     start = page * _PIB_PAGE_SIZE
-    chunk = pib_list[start: start + _PIB_PAGE_SIZE]
+    chunk = list(enumerate(pib_list[start: start + _PIB_PAGE_SIZE], start=start))
     total_pages = max(1, (len(pib_list) + _PIB_PAGE_SIZE - 1) // _PIB_PAGE_SIZE)
 
     buttons = [
-        [InlineKeyboardButton(text=pib, callback_data=f"{callback_prefix}:{pib}")]
-        for pib in chunk
+        [InlineKeyboardButton(text=pib, callback_data=f"{callback_prefix}:i:{idx}")]
+        for idx, pib in chunk
     ]
 
     nav = []
@@ -141,7 +144,7 @@ def kb_users_list(users: list, page: int = 0, page_size: int = 10) -> InlineKeyb
     for u in chunk:
         label = u.pib or u.username or str(u.user_id)
         status = "✅" if u.is_active else "❌"
-        linked = "🔗" if u.pib else "⚠️"  # присвоєно / ні
+        linked = "🔗" if u.pib else "⚠️"
         buttons.append([
             InlineKeyboardButton(
                 text=f"{status}{linked} {label}",

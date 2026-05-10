@@ -4,10 +4,14 @@
   1. Адмін відкриває картку юзера → натискає "🔗 Присвоїти ПІБ"
   2. Бот показує inline-список всіх ПІБ з графіка (з пагінацією)
   3. Адмін вибирає ПІБ → зберігається в users.pib
+
+Кнопки вибору: callback_data = "{_PREFIX}:{user_id}:i:{pib_index}"
+Кнопки пагінації: callback_data = "{_PREFIX}:{user_id}:page:{page}"
+ПІБ отримується через індекс з відсортованого списку — так callback_data
+ніколи не перевищить ліміт Telegram у 64 байти.
 """
 
 from aiogram import Router, F
-from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,22 +67,32 @@ async def cb_assign_pib_page(
     callback: CallbackQuery, session: AsyncSession
 ) -> None:
     await callback.answer()
-    _, user_id_str, _, page_str = callback.data.split(":")
-    user_id = int(user_id_str)
-    page = int(page_str)
+    parts = callback.data.split(":")
+    # assign_pib:{user_id}:page:{page}
+    user_id = int(parts[1])
+    page = int(parts[3])
     await _show_pib_picker(callback, session, user_id, page=page)
 
 
-@router.callback_query(F.data.regexp(rf"^{_PREFIX}:(\d+):(.+)$"))
+@router.callback_query(F.data.regexp(rf"^{_PREFIX}:(\d+):i:(\d+)$"))
 async def cb_assign_pib_select(
     callback: CallbackQuery, session: AsyncSession
 ) -> None:
     await callback.answer()
-    parts = callback.data.split(":", 2)  # ["assign_pib", user_id, pib]
+    parts = callback.data.split(":")
+    # assign_pib:{user_id}:i:{pib_index}
     user_id = int(parts[1])
-    pib = parts[2]
+    pib_index = int(parts[3])
 
-    # Перевірка чи цей ПІБ вже присвоєно іншому юзеру
+    schedule_repo = ScheduleRepository(session)
+    pib_list = await schedule_repo.get_all_unique_pib()
+
+    if pib_index >= len(pib_list):
+        await callback.answer("⚠️ Список ПІБ змінився, спробуйте ще раз", show_alert=True)
+        return
+
+    pib = pib_list[pib_index]
+
     user_repo = UserRepository(session)
     existing = await user_repo.get_by_pib(pib)
     if existing and existing.user_id != user_id:
